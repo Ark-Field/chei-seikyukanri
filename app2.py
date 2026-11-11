@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（クエリ安定化・PDF完全対応版）")
+st.title("🖨️ 期間集計・締日請求書発行（一括取得・45秒タイムアウト版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -158,7 +158,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     for item in items:
         q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
         p_num = float(item["単価"]) if item["単価"] else 0.0
-        line_total = q_num * p_num if (q_num > 0 and p_num > 0) else ""
+        line_total = q_num * p_num if (q_num > 0 and q_num > 0) else ""
         format_edition = f"{item['判型']} / {item['版']}" if (item['判型'] or item['版']) else ""
 
         qty_display = f"{q_num} 部" if q_num > 0 else ""
@@ -176,7 +176,6 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
             Paragraph(str(item["備考"]), td_style)
         ])
 
-    # ★ 最低18行になるように空行（罫線用パディング）を自動追加
     min_rows = 18
     current_row_count = len(items)
     if current_row_count < min_rows:
@@ -220,30 +219,20 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数（サンプルコードの堅牢なクエリ＆例外処理をベースに実装）
+# 5. データ取得関数（タイムアウト45秒・一括取得）
 # ==========================================
-def fetch_pocket_records(target_shimebi):
+def fetch_pocket_records():
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
-    params = {}
-    if target_shimebi:
-        # サンプルコードと同様に、条件がある場合のみqueryパラメータを構築しつつ、新着順ソートを付与
-        params["query"] = f'field-99 = "{target_shimebi}" order by field-1 desc'
-    else:
-        params["query"] = "order by field-1 desc"
-
     try:
-        st.info(f"📡 @pocketサーバーからデータを取得中（締日: {target_shimebi or '指定なし'}）...")
-        response = requests.get(url, headers=headers, params=params, timeout=20)
-        
-        # サンプルコード同様、クエリ付きリクエストで失敗した場合は安全にクエリなしでフォールバック
-        if response.status_code != 200 and "query" in params:
-            response = requests.get(url, headers=headers, timeout=20)
+        st.info("📡 @pocketサーバーから全データを取得中（タイムアウト45秒）...")
+        # タイムアウトを45秒に設定し、確実に全件を受け取る
+        response = requests.get(url, headers=headers, timeout=45)
 
         if response.status_code == 200:
-            res_json = response.json()
-            raw_items = res_json.get("records", res_json.get("Data", res_json.get("Records", [])))
+            result = response.json()
+            raw_items = result.get("records", result.get("Data", result.get("Records", [])))
             parsed_records = []
             for item in raw_items:
                 if not isinstance(item, dict):
@@ -255,14 +244,16 @@ def fetch_pocket_records(target_shimebi):
             st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
-            st.error(f"❌ APIエラー (ステータスコード {response.status_code}): {response.text}")
+            st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
     except Exception as e:
-        st.error(f"🚨 通信例外エラー: {e}")
+        st.error(f"🚨 通信例外エラー（タイムアウト等）: {e}")
     return []
 
 # ==========================================
 # 6. メイン画面
 # ==========================================
+st.info("💡 期間・締日を設定し、必要に応じて挨拶文や顧客ごとの備考を入力してPDFを作成できます。")
+
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
 auto_start = date(c_year, c_month, 1)
@@ -294,7 +285,7 @@ with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    all_recs = fetch_pocket_records(target_shimebi)
+    all_recs = fetch_pocket_records()
     period_invoice_rows = []
 
     for r in all_recs:
@@ -303,6 +294,10 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
         book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
+
+        # 締日フィルターの判定
+        if target_shimebi and target_shimebi not in shimebi_val:
+            continue
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
