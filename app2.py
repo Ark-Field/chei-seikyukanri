@@ -199,15 +199,17 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     return buffer
 
 # ==========================================
-# 5. データ取得関数（単体テスト用）
+# 5. データ取得関数（タイムアウト対策 ＆ 1000件対応）
 # ==========================================
 def fetch_pocket_records_for_period(start_date, end_date):
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
-    # 期間に余裕を持たせてAPIから全件近くを取得してパース
     try:
-        response = requests.get(url, headers=headers, timeout=20)
+        st.info("📡 @pocketからデータを取得しています（データ量が多いため最大45秒ほどかかります）...")
+        # タイムアウトを45秒に設定し、確実に全件を安全に取得
+        response = requests.get(url, headers=headers, timeout=45)
+        
         if response.status_code == 200:
             result = response.json()
             raw_items = result.get("records", result.get("Data", result.get("Records", [])))
@@ -221,9 +223,13 @@ def fetch_pocket_records_for_period(start_date, end_date):
                     rec_body = {}
                 merged_body = {**item, **rec_body}
                 parsed_records.append(merged_body)
+            
+            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。対象期間・締日の集計を行います。")
             return parsed_records
+        else:
+            st.error(f"❌ APIエラー (ステータスコード {response.status_code}): {response.text}")
     except Exception as e:
-        st.error(f"🚨 通信例外エラー: {e}")
+        st.error(f"🚨 通信例外エラー（タイムアウト等）: {e}")
     return []
 
 # ==========================================
@@ -265,44 +271,43 @@ with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    with st.spinner("@ポケットからデータを取得・集計中..."):
-        all_recs = fetch_pocket_records_for_period(inv_start_date, inv_end_date)
-        
-        period_invoice_rows = []
-        for r in all_recs:
-            pub_name = clean_val(r.get("field-8", ""))     # 出版社名
-            shimebi_val = clean_val(r.get("field-99", "")) # 締日 (99, 20, 15, 10)
-            book_title = clean_val(r.get("field-13", ""))  # 品名 (field-13)
-            format_val = clean_val(r.get("field-23", ""))  # 判型 (field-23)
-            edition_val = clean_val(r.get("field-27", "")) # 版 (field-27)
+    all_recs = fetch_pocket_records_for_period(inv_start_date, inv_end_date)
+    
+    period_invoice_rows = []
+    for r in all_recs:
+        pub_name = clean_val(r.get("field-8", ""))     # 出版社名
+        shimebi_val = clean_val(r.get("field-99", "")) # 締日 (99, 20, 15, 10)
+        book_title = clean_val(r.get("field-13", ""))  # 品名 (field-13)
+        format_val = clean_val(r.get("field-23", ""))  # 判型 (field-23)
+        edition_val = clean_val(r.get("field-27", "")) # 版 (field-27)
 
-            if target_shimebi and target_shimebi not in shimebi_val:
-                continue
+        if target_shimebi and target_shimebi not in shimebi_val:
+            continue
 
-            sub_89 = r.get("field-89", [])
-            if isinstance(sub_89, list):
-                for item_89 in sub_89:
-                    rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
-                    sale_date_raw = parse_date_safe(rec_89.get("field-89_1")) # 売上日
+        sub_89 = r.get("field-89", [])
+        if isinstance(sub_89, list):
+            for item_89 in sub_89:
+                rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
+                sale_date_raw = parse_date_safe(rec_89.get("field-89_1")) # 売上日
 
-                    if sale_date_raw and inv_start_date <= sale_date_raw <= inv_end_date:
-                        q_str = clean_val(rec_89.get("field-89_3", "0")) # 請求数量
-                        p_str = clean_val(r.get("field-5", "0"))         # 単価
-                        
-                        period_invoice_rows.append({
-                            "出版社名": pub_name,
-                            "締日": shimebi_val,
-                            "売上日": sale_date_raw,
-                            "ISBN": clean_val(r.get("field-93", "")),
-                            "品名": book_title,
-                            "判型": format_val,
-                            "版": edition_val,
-                            "請求数量": q_str,
-                            "単価": p_str,
-                            "備考": clean_val(rec_89.get("field-89_7", ""))
-                        })
+                if sale_date_raw and inv_start_date <= sale_date_raw <= inv_end_date:
+                    q_str = clean_val(rec_89.get("field-89_3", "0")) # 請求数量
+                    p_str = clean_val(r.get("field-5", "0"))         # 単価
+                    
+                    period_invoice_rows.append({
+                        "出版社名": pub_name,
+                        "締日": shimebi_val,
+                        "売上日": sale_date_raw,
+                        "ISBN": clean_val(r.get("field-93", "")),
+                        "品名": book_title,
+                        "判型": format_val,
+                        "版": edition_val,
+                        "請求数量": q_str,
+                        "単価": p_str,
+                        "備考": clean_val(rec_89.get("field-89_7", ""))
+                    })
 
-        st.session_state["period_invoice_rows"] = period_invoice_rows
+    st.session_state["period_invoice_rows"] = period_invoice_rows
 
 if "period_invoice_rows" in st.session_state and st.session_state["period_invoice_rows"]:
     df_period_inv = pd.DataFrame(st.session_state["period_invoice_rows"])
