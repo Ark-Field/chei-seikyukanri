@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（安定化対策版）")
+st.title("🖨️ 期間集計・締日請求書発行（高速キャッシュ・フィルタリング版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -225,25 +225,19 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数（タイムアウト30秒に拡張 ＆ 安全なフォールバック）
+# 5. データ取得関数（一度取得したらsession_stateにキャッシュする仕組み）
 # ==========================================
-def fetch_pocket_records_for_period(target_shimebi):
+def get_cached_pocket_records():
+    if "cached_pocket_all_recs" in st.session_state and st.session_state["cached_pocket_all_recs"]:
+        return st.session_state["cached_pocket_all_recs"]
+
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
-    # 締日による絞り込みクエリ
-    query_str = f'field-99 = "{target_shimebi}" order by field-1 desc' if target_shimebi else "order by field-1 desc"
-    params = {"query": query_str}
-    
     try:
-        st.info(f"📡 サーバーからデータを取得中（締日: {target_shimebi} / タイムアウト30秒）...")
-        # タイムアウトを 30秒 に戻して確実に受け取る
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        st.info("📡 @pocketサーバーからデータを初回取得しています（最大30秒）...")
+        response = requests.get(url, headers=headers, timeout=30)
         
-        # クエリで万が一エラーになる場合はクエリなしで安全に再取得
-        if response.status_code != 200:
-            response = requests.get(url, headers=headers, timeout=30)
-
         if response.status_code == 200:
             result = response.json()
             raw_items = result.get("records", result.get("Data", result.get("Records", [])))
@@ -255,7 +249,10 @@ def fetch_pocket_records_for_period(target_shimebi):
                 if not isinstance(rec_body, dict):
                     rec_body = {}
                 parsed_records.append({**item, **rec_body})
-            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。")
+            
+            # セッションにキャッシュ保存（2回目以降はAPI通信ゼロで瞬時に動作）
+            st.session_state["cached_pocket_all_recs"] = parsed_records
+            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードをキャッシュしました。")
             return parsed_records
         else:
             st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
@@ -266,7 +263,7 @@ def fetch_pocket_records_for_period(target_shimebi):
 # ==========================================
 # 6. メイン画面
 # ==========================================
-st.info("💡 期間・締日を設定し、必要に応じて挨拶文や顧客ごとの備考を入力してPDFを作成できます。")
+st.info("💡 期間・締日を設定し、必要に応じて挨拶文や顧客ごとの備考を入力してPDFを作成できます。（高速キャッシュ対応）")
 
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
@@ -298,8 +295,16 @@ with bc2:
 with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
+# キャッシュクリア用ボタン
+if st.button("🔄 @pocketデータを再読み込み（キャッシュクリア）", key="btn_clear_cache"):
+    if "cached_pocket_all_recs" in st.session_state:
+        del st.session_state["cached_pocket_all_recs"]
+    st.success("🔄 キャッシュをクリアしました。再度「条件に合致するデータを集計する」を押してください。")
+    st.rerun()
+
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    all_recs = fetch_pocket_records_for_period(target_shimebi)
+    # キャッシュからデータを一瞬で取得し、Python側で絞り込み（サーバー負荷ゼロ＆タイムアウト防止）
+    all_recs = get_cached_pocket_records()
     period_invoice_rows = []
 
     for r in all_recs:
@@ -308,6 +313,10 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
         book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
+
+        # 締日グループのチェック（完全一致または部分一致）
+        if target_shimebi and target_shimebi not in shimebi_val:
+            continue
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
