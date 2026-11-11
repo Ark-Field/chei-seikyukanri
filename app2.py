@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（顧客別個別PDF・幅調整版）")
+st.title("🖨️ 期間集計・締日請求書発行（罫線・備考UI対応版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -93,8 +93,8 @@ def parse_date_safe(val):
     except ValueError:
         return None
 
-# --- 期間集計請求書用PDF生成（文字幅調整版） ---
-def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
+# --- 期間集計請求書用PDF生成（罫線・備考対応） ---
+def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, customer_remark, bank_info):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=portrait(A4), leftMargin=25, rightMargin=25, topMargin=25, bottomMargin=25)
     styles = getSampleStyleSheet()
@@ -115,7 +115,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
             Paragraph("<b>(株)中永製本所</b><br/>埼玉県さいたま市岩槻区真福寺1400<br/>TEL 048-798-7377", ParagraphStyle("SInfo", parent=h_style, alignment=2))
         ],
         [
-            Paragraph(f"<b>対象期間:</b> {period_str}", h_style),
+            Paragraph(f"<b>対象期間:</b> {period_str}<br/>{greeting_text}", h_style),
             Paragraph(f"発行日: {date.today().strftime('%Y年%m月%d日')}", ParagraphStyle("DateInfo", parent=h_style, alignment=2))
         ]
     ]
@@ -144,8 +144,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
-    # 明細テーブル（ご要望の文字幅設定に基づきカラム幅を再配分: 合計545pt）
-    # 売上日(60), ISBN(70), 品名(140), 判型/版(55), 数量(45), 単価(60), 金額(65), 備考(50)
+    # 明細テーブル（罫線をしっかり引いた仕様）
     table_data = [[
         Paragraph("売上日", th_style),
         Paragraph("ISBN", th_style),
@@ -180,47 +179,52 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOTTOMPADDING", (0, 0), (-1,-1), 4),
         ("TOPPADDING", (0, 0), (-1,-1), 4),
-        ("GRID", (0, 0), (-1,-1), 0.3, colors.HexColor("#CBD5E1")),
+        ("GRID", (0, 0), (-1,-1), 0.5, colors.HexColor("#94A3B8")), # しっかりした罫線
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1E3A8A")),
     ]))
     elements.append(inv_table)
     elements.append(Spacer(1, 10))
 
+    # --- 最終段：備考欄 ＆ 振込先口座情報 ---
+    footer_content = []
+    
+    if customer_remark:
+        remark_text = f"<b>【備考】</b><br/>{customer_remark.replace(chr(10), '<br/>')}"
+        footer_content.append([Paragraph(remark_text, td_style)])
+    
     bank_text = f"<b>【お振込先口座】</b><br/>{bank_info['bank_name']} {bank_info['bank_branch']} ({bank_info['bank_type']}) {bank_info['bank_account']}<br/>口座名義: {bank_info['bank_holder']}"
-    bank_table = Table([[Paragraph(bank_text, td_style)]], colWidths=[280])
-    bank_table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F9F9F9")),
-        ("BOX", (0,0), (-1,-1), 1, colors.HexColor("#333333")),
-        ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+    footer_content.append([Paragraph(bank_text, td_style)])
+
+    footer_table = Table(footer_content, colWidths=[545])
+    footer_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
+        ("BOX", (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
+        ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6),
         ("LEFTPADDING", (0,0), (-1,-1), 8), ("RIGHTPADDING", (0,0), (-1,-1), 8),
     ]))
-    elements.append(bank_table)
+    elements.append(footer_table)
 
     doc.build(elements)
     buffer.seek(0)
     return buffer
 
 # ==========================================
-# 5. データ取得関数（最新順：降順ソートで1000件の壁を突破）
+# 5. データ取得関数
 # ==========================================
 def fetch_pocket_records_for_period():
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
-    
-    params = {
-        "query": "order by field-1 desc"
-    }
+    params = {"query": "order by field-1 desc"}
     
     try:
         st.info("📡 @pocketから最新データを取得しています（新しい順・最大45秒）...")
         response = requests.get(url, headers=headers, params=params, timeout=45)
-        
         if response.status_code != 200 and "query" in params:
             response = requests.get(url, headers=headers, timeout=45)
 
         if response.status_code == 200:
             result = response.json()
             raw_items = result.get("records", result.get("Data", result.get("Records", [])))
-            
             parsed_records = []
             for item in raw_items:
                 if not isinstance(item, dict):
@@ -228,9 +232,7 @@ def fetch_pocket_records_for_period():
                 rec_body = item.get("record", {})
                 if not isinstance(rec_body, dict):
                     rec_body = {}
-                merged_body = {**item, **rec_body}
-                parsed_records.append(merged_body)
-            
+                parsed_records.append({**item, **rec_body})
             st.success(f"✨ 取得成功: 最新順に合計 {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
@@ -242,7 +244,7 @@ def fetch_pocket_records_for_period():
 # ==========================================
 # 6. メイン画面
 # ==========================================
-st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間」をもとに集計します。")
+st.info("💡 期間・締日を設定し、必要に応じて挨拶文や顧客ごとの備考を入力してPDFを作成できます。")
 
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
@@ -252,18 +254,17 @@ auto_end = date(c_year, c_month, auto_last_day)
 
 col_c1, col_c2, col_c3 = st.columns(3)
 with col_c1:
-    shimebi_options = {
-        "末日締め (99)": "99",
-        "20日締め (20)": "20",
-        "15日締め (15)": "15",
-        "10日締め (10)": "10"
-    }
+    shimebi_options = {"末日締め (99)": "99", "20日締め (20)": "20", "15日締め (15)": "15", "10日締め (10)": "10"}
     selected_shimebi_label = st.selectbox("対象の締日グループ", options=list(shimebi_options.keys()), key="inv_shime_sel")
     target_shimebi = shimebi_options[selected_shimebi_label]
 with col_c2:
     inv_start_date = st.date_input("集計期間（開始）", value=auto_start, key="inv_start")
 with col_c3:
     inv_end_date = st.date_input("集計期間（終了）", value=auto_end, key="inv_end")
+
+# 挨拶文の編集可能UI
+default_greeting = "下記のとおりご請求申し上げます。"
+greeting_input = st.text_input("📝 PDFヘッダーの挨拶文（編集可能）", value=default_greeting, key="pdf_greeting")
 
 st.markdown("#### 🏦 請求書記載の銀行口座情報")
 bc1, bc2, bc3 = st.columns(3)
@@ -278,11 +279,7 @@ with bc3:
 
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
     all_recs = fetch_pocket_records_for_period()
-    
     period_invoice_rows = []
-    skipped_shime_count = 0
-    skipped_date_count = 0
-    skipped_empty_count = 0
 
     for r in all_recs:
         pub_name = clean_val(r.get("field-8", ""))
@@ -292,7 +289,6 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
         edition_val = clean_val(r.get("field-27", ""))
 
         if target_shimebi and target_shimebi not in shimebi_val:
-            skipped_shime_count += 1
             continue
 
         sub_89 = r.get("field-89", [])
@@ -302,14 +298,11 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
                 sale_date_raw = parse_date_safe(rec_89.get("field-89_1"))
                 q_str = clean_val(rec_89.get("field-89_3", "0"))
 
-                # @pocketの空欄行（数量が空、0、または売上日なし）を自動スキップ
                 if not sale_date_raw or not q_str or q_str == "0":
-                    skipped_empty_count += 1
                     continue
 
                 if inv_start_date <= sale_date_raw <= inv_end_date:
                     p_str = clean_val(r.get("field-5", "0"))
-                    
                     period_invoice_rows.append({
                         "出版社名": pub_name if pub_name else "（出版社名未設定）",
                         "締日": shimebi_val,
@@ -322,8 +315,6 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
                         "単価": p_str,
                         "備考": clean_val(rec_89.get("field-89_7", ""))
                     })
-                else:
-                    skipped_date_count += 1
 
     st.session_state["period_invoice_rows"] = period_invoice_rows
 
@@ -331,37 +322,42 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
     df_period_inv = pd.DataFrame(st.session_state["period_invoice_rows"])
     st.success(f"✨ 期間集計対象の有効な明細が **{len(df_period_inv)} 件** 見つかりました。")
 
-    # --- 顧客別（出版社別）の売上額集計テーブルの作成 ---
-    summary_data = []
     from collections import defaultdict
     grouped_period_inv = defaultdict(list)
-    
     for r in st.session_state["period_invoice_rows"]:
-        pub = r["出版社名"]
-        grouped_period_inv[pub].append(r)
+        grouped_period_inv[r["出版社名"]].append(r)
 
+    # --- 顧客別サマリー ＆ 個別備考の入力UI ---
+    st.markdown("### 📊 顧客別売上額集計 ＆ 個別備考の編集")
+    st.info("💡 各顧客ごとにPDFへ記載する「備考」を入力できます。")
+
+    # セッションステートに顧客ごとの備考用辞書を初期化
+    if "customer_remarks" not in st.session_state:
+        st.session_state["customer_remarks"] = {}
+
+    summary_data = []
     for pub, items in grouped_period_inv.items():
-        subtotal = 0
-        for item in items:
-            q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
-            p_num = float(item["単価"]) if item["単価"] else 0.0
-            subtotal += q_num * p_num
+        subtotal = sum((int(i["請求数量"]) if str(i["請求数量"]).isdigit() else 0) * (float(i["単価"]) if i["単価"] else 0.0) for i in items)
         tax = round(subtotal * 0.10)
         total = subtotal + tax
-        summary_data.append({
-            "顧客名（出版社名）": pub,
-            "明細件数": len(items),
-            "小計（税抜）": f"￥{subtotal:,.0f}",
-            "消費税(10%)": f"￥{tax:,.0f}",
-            "合計金額（税込）": f"￥{total:,.0f}"
-        })
+        
+        # デフォルト備考
+        if pub not in st.session_state["customer_remarks"]:
+            st.session_state["customer_remarks"][pub] = ""
 
-    df_summary = pd.DataFrame(summary_data)
-    
-    st.markdown("### 📊 顧客別売上額集計サマリー")
-    st.dataframe(df_summary, use_container_width=True)
-    
-    st.markdown("---")
+        col_sum1, col_sum2 = st.columns([2, 3])
+        with col_sum1:
+            st.markdown(f"**🏢 {pub}**")
+            st.write(f"明細件数: {len(items)}件 / 合計(税込): **￥{total:,.0f}**")
+        with col_sum2:
+            st.session_state["customer_remarks"][pub] = st.text_area(
+                f"📝 {pub} の請求書備考",
+                value=st.session_state["customer_remarks"][pub],
+                key=f"remark_input_{pub}",
+                height=70
+            )
+        st.markdown("---")
+
     st.subheader("📥 顧客ごとの個別請求書PDFダウンロード")
 
     period_str_header = f"{inv_start_date.strftime('%Y年%m月%d日')} ～ {inv_end_date.strftime('%Y年%m月%d日')}"
@@ -375,7 +371,8 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
         with col_p1:
             st.write(f"🏢 **{pub}** （明細数: {len(items)}件）")
         with col_p2:
-            pdf_bytes = generate_period_invoice_pdf(pub, items, period_str_header, bank_dict)
+            customer_remark_text = st.session_state["customer_remarks"].get(pub, "")
+            pdf_bytes = generate_period_invoice_pdf(pub, items, period_str_header, greeting_input, customer_remark_text, bank_dict)
             st.download_button(
                 label="🖨️ PDFダウンロード",
                 data=pdf_bytes,
