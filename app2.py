@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（顧客別個別PDF）")
+st.title("🖨️ 期間集計・締日請求書発行（顧客別個別PDF・幅調整版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -93,7 +93,7 @@ def parse_date_safe(val):
     except ValueError:
         return None
 
-# --- 期間集計請求書用PDF生成 ---
+# --- 期間集計請求書用PDF生成（文字幅調整版） ---
 def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=portrait(A4), leftMargin=25, rightMargin=25, topMargin=25, bottomMargin=25)
@@ -144,6 +144,8 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
+    # 明細テーブル（ご要望の文字幅設定に基づきカラム幅を再配分: 合計545pt）
+    # 売上日(60), ISBN(70), 品名(140), 判型/版(55), 数量(45), 単価(60), 金額(65), 備考(50)
     table_data = [[
         Paragraph("売上日", th_style),
         Paragraph("ISBN", th_style),
@@ -163,16 +165,16 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
 
         table_data.append([
             Paragraph(str(item["売上日"]), td_style),
-            Paragraph(item["ISBN"], td_style),
-            Paragraph(item["品名"], td_style),
+            Paragraph(str(item["ISBN"]), td_style),
+            Paragraph(str(item["品名"]), td_style),
             Paragraph(format_edition, td_style),
             Paragraph(f"{q_num} 部", td_right),
             Paragraph(f"￥{p_num:,.2f}", td_right),
             Paragraph(f"￥{line_total:,.2f}", td_right),
-            Paragraph(item["備考"], td_style)
+            Paragraph(str(item["備考"]), td_style)
         ])
 
-    inv_table = Table(table_data, colWidths=[60, 75, 130, 60, 45, 60, 65, 50])
+    inv_table = Table(table_data, colWidths=[60, 70, 140, 55, 45, 60, 65, 50])
     inv_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -204,7 +206,6 @@ def fetch_pocket_records_for_period():
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
-    # queryパラメータで受注日(field-1)の新しい順(desc)にソートして1000件を取得
     params = {
         "query": "order by field-1 desc"
     }
@@ -214,7 +215,6 @@ def fetch_pocket_records_for_period():
         response = requests.get(url, headers=headers, params=params, timeout=45)
         
         if response.status_code != 200 and "query" in params:
-            # クエリ付きでエラーになる場合のフォールバック
             response = requests.get(url, headers=headers, timeout=45)
 
         if response.status_code == 200:
@@ -240,9 +240,9 @@ def fetch_pocket_records_for_period():
     return []
 
 # ==========================================
-# 6. メイン画面（当月自動設定 ＆ デバッグ表示付き）
+# 6. メイン画面
 # ==========================================
-st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間（当月自動）」をもとに集計します。")
+st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間」をもとに集計します。")
 
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
@@ -279,24 +279,10 @@ with bc3:
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
     all_recs = fetch_pocket_records_for_period()
     
-    # 取得した最新データからの最初の3件のデバッグ表示
-    if all_recs:
-        st.write("--- 🔍 【最新順データ確認】最初の3件のレコード構造 ---")
-        for idx, sample_r in enumerate(all_recs[:3]):
-            s_pub = sample_r.get("field-8", "（空）")
-            s_shime = sample_r.get("field-99", "（空）")
-            s_ord_date = sample_r.get("field-1", "（空）")
-            s_sub89 = sample_r.get("field-89", [])
-            st.markdown(f"**[レコード #{idx+1}]** 受注日(`field-1`): `{s_ord_date}` | 出版社名(`field-8`): `{s_pub}` | 締日(`field-99`): `{s_shime}`")
-            if isinstance(s_sub89, list) and s_sub89:
-                for sub_i, item_89 in enumerate(s_sub89):
-                    rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
-                    st.code(f"  └ サブ89[{sub_i}] 売上日(field-89_1): {rec_89.get('field-89_1')} | 請求数量: {rec_89.get('field-89_3')}")
-        st.write("---------------------------------------------------------")
-
     period_invoice_rows = []
     skipped_shime_count = 0
     skipped_date_count = 0
+    skipped_empty_count = 0
 
     for r in all_recs:
         pub_name = clean_val(r.get("field-8", ""))
@@ -314,13 +300,18 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
             for item_89 in sub_89:
                 rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
                 sale_date_raw = parse_date_safe(rec_89.get("field-89_1"))
+                q_str = clean_val(rec_89.get("field-89_3", "0"))
 
-                if sale_date_raw and inv_start_date <= sale_date_raw <= inv_end_date:
-                    q_str = clean_val(rec_89.get("field-89_3", "0"))
+                # @pocketの空欄行（数量が空、0、または売上日なし）を自動スキップ
+                if not sale_date_raw or not q_str or q_str == "0":
+                    skipped_empty_count += 1
+                    continue
+
+                if inv_start_date <= sale_date_raw <= inv_end_date:
                     p_str = clean_val(r.get("field-5", "0"))
                     
                     period_invoice_rows.append({
-                        "出版社名": pub_name,
+                        "出版社名": pub_name if pub_name else "（出版社名未設定）",
                         "締日": shimebi_val,
                         "売上日": sale_date_raw,
                         "ISBN": clean_val(r.get("field-93", "")),
@@ -334,19 +325,42 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
                 else:
                     skipped_date_count += 1
 
-    st.info(f"📊 【集計内訳】 締日違いで除外: {skipped_shime_count}件 | 期間外（または売上日なし）で除外: {skipped_date_count}件")
     st.session_state["period_invoice_rows"] = period_invoice_rows
 
 if "period_invoice_rows" in st.session_state and st.session_state["period_invoice_rows"]:
     df_period_inv = pd.DataFrame(st.session_state["period_invoice_rows"])
-    st.success(f"✨ 期間集計対象の明細が **{len(df_period_inv)} 件** 見つかりました。")
-    st.dataframe(df_period_inv, use_container_width=True)
+    st.success(f"✨ 期間集計対象の有効な明細が **{len(df_period_inv)} 件** 見つかりました。")
 
+    # --- 顧客別（出版社別）の売上額集計テーブルの作成 ---
+    summary_data = []
     from collections import defaultdict
     grouped_period_inv = defaultdict(list)
+    
     for r in st.session_state["period_invoice_rows"]:
-        grouped_period_inv[r["出版社名"]].append(r)
+        pub = r["出版社名"]
+        grouped_period_inv[pub].append(r)
 
+    for pub, items in grouped_period_inv.items():
+        subtotal = 0
+        for item in items:
+            q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
+            p_num = float(item["単価"]) if item["単価"] else 0.0
+            subtotal += q_num * p_num
+        tax = round(subtotal * 0.10)
+        total = subtotal + tax
+        summary_data.append({
+            "顧客名（出版社名）": pub,
+            "明細件数": len(items),
+            "小計（税抜）": f"￥{subtotal:,.0f}",
+            "消費税(10%)": f"￥{tax:,.0f}",
+            "合計金額（税込）": f"￥{total:,.0f}"
+        })
+
+    df_summary = pd.DataFrame(summary_data)
+    
+    st.markdown("### 📊 顧客別売上額集計サマリー")
+    st.dataframe(df_summary, use_container_width=True)
+    
     st.markdown("---")
     st.subheader("📥 顧客ごとの個別請求書PDFダウンロード")
 
@@ -359,16 +373,15 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
     for pub, items in grouped_period_inv.items():
         col_p1, col_p2 = st.columns([3, 1])
         with col_p1:
-            st.write(f"🏢 **{pub if pub else '（出版社名未設定）'}** （明細数: {len(items)}件）")
+            st.write(f"🏢 **{pub}** （明細数: {len(items)}件）")
         with col_p2:
             pdf_bytes = generate_period_invoice_pdf(pub, items, period_str_header, bank_dict)
-            safe_pub_name = pub if pub else "未設定"
             st.download_button(
                 label="🖨️ PDFダウンロード",
                 data=pdf_bytes,
-                file_name=f"請求書_{safe_pub_name}_{inv_start_date.strftime('%Y%m%d')}-{inv_end_date.strftime('%Y%m%d')}.pdf",
+                file_name=f"請求書_{pub}_{inv_start_date.strftime('%Y%m%d')}-{inv_end_date.strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
                 key=f"dl_period_inv_{pub}"
             )
 elif "period_invoice_rows" in st.session_state:
-    st.warning("⚠️ 指定された条件（当月期間）に一致する売上データが見つかりませんでした。上記のデバッグ情報に表示された最新データの受注日や売上日をご確認ください。")
+    st.warning("⚠️ 指定された条件に一致する有効な売上データが見つかりませんでした。")
