@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（安定化対策版）")
+st.title("🖨️ 期間集計・締日請求書発行（）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -93,7 +93,7 @@ def parse_date_safe(val):
     except ValueError:
         return None
 
-# --- 期間集計請求書用PDF生成（18行パディング＆罫線対応） ---
+# --- 期間集計請求書用PDF生成（） ---
 def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, customer_remark, bank_info):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=portrait(A4), leftMargin=25, rightMargin=25, topMargin=25, bottomMargin=25)
