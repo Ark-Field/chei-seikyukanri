@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（）")
+st.title("🖨️ 期間集計・締日請求書発行（安定化対策版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -225,31 +225,24 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数（）
+# 5. データ取得関数（タイムアウト30秒に拡張 ＆ 安全なフォールバック）
 # ==========================================
 def fetch_pocket_records_for_period(target_shimebi):
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
-    # 選択された締日グループ（field-99）をAPI側で絞り込み、新着順(desc)にソート
-    query_parts = []
-    if target_shimebi:
-        query_parts.append(f'field-99 = "{target_shimebi}"')
-    
-    query_str = " and ".join(query_parts) if query_parts else ""
-    if query_str:
-        query_str += " order by field-1 desc"
-    else:
-        query_str = "order by field-1 desc"
-
+    # 締日による絞り込みクエリ
+    query_str = f'field-99 = "{target_shimebi}" order by field-1 desc' if target_shimebi else "order by field-1 desc"
     params = {"query": query_str}
     
     try:
-        st.info(f"📡 サーバーから締日クエリ ({target_shimebi}) でデータを絞り込み取得中（タイムアウト15秒）...")
-        response = requests.get(url, headers=headers, params=params, timeout=15)
+        st.info(f"📡 サーバーからデータを取得中（締日: {target_shimebi} / タイムアウト30秒）...")
+        # タイムアウトを 30秒 に戻して確実に受け取る
+        response = requests.get(url, headers=headers, params=params, timeout=30)
         
+        # クエリで万が一エラーになる場合はクエリなしで安全に再取得
         if response.status_code != 200:
-            response = requests.get(url, headers=headers, timeout=15)
+            response = requests.get(url, headers=headers, timeout=30)
 
         if response.status_code == 200:
             result = response.json()
@@ -262,7 +255,7 @@ def fetch_pocket_records_for_period(target_shimebi):
                 if not isinstance(rec_body, dict):
                     rec_body = {}
                 parsed_records.append({**item, **rec_body})
-            st.success(f"✨ 取得成功: 絞り込み対象の {len(parsed_records)} 件のレコードを読み込みました。")
+            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
             st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
@@ -306,7 +299,6 @@ with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    # APIのサーバー負担を減らすため、選択された締日をクエリに渡して必要最小限のレコードを取得
     all_recs = fetch_pocket_records_for_period(target_shimebi)
     period_invoice_rows = []
 
