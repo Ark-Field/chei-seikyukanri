@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（高速キャッシュ・フィルタリング版）")
+st.title("🖨️ 期間集計・締日請求書発行（クエリ安定化・PDF完全対応版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -44,16 +44,16 @@ def setup_japanese_font():
         try:
             pdfmetrics.registerFont(TTFont("JPFont", local_font_path))
             return "JPFont"
-        except Exception as e:
-            print(f"同梱フォント登録エラー: {e}")
+        except Exception:
+            pass
 
     win_font = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "Fonts", "msgothic.ttc")
     if os.path.exists(win_font):
         try:
             pdfmetrics.registerFont(TTFont("JPFont", win_font, subfontIndex=0))
             return "JPFont"
-        except Exception as e:
-            print(f"Windowsフォント登録エラー: {e}")
+        except Exception:
+            pass
 
     return "Helvetica"
 
@@ -176,19 +176,14 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
             Paragraph(str(item["備考"]), td_style)
         ])
 
+    # ★ 最低18行になるように空行（罫線用パディング）を自動追加
     min_rows = 18
     current_row_count = len(items)
     if current_row_count < min_rows:
         for _ in range(min_rows - current_row_count):
             table_data.append([
-                Paragraph("", td_style),
-                Paragraph("", td_style),
-                Paragraph("", td_style),
-                Paragraph("", td_style),
-                Paragraph("", td_right),
-                Paragraph("", td_right),
-                Paragraph("", td_right),
-                Paragraph("", td_style)
+                Paragraph("", td_style), Paragraph("", td_style), Paragraph("", td_style), Paragraph("", td_style),
+                Paragraph("", td_right), Paragraph("", td_right), Paragraph("", td_right), Paragraph("", td_style)
             ])
 
     inv_table = Table(table_data, colWidths=[60, 70, 140, 55, 45, 60, 65, 50])
@@ -225,22 +220,30 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数（一度取得したらsession_stateにキャッシュする仕組み）
+# 5. データ取得関数（サンプルコードの堅牢なクエリ＆例外処理をベースに実装）
 # ==========================================
-def get_cached_pocket_records():
-    if "cached_pocket_all_recs" in st.session_state and st.session_state["cached_pocket_all_recs"]:
-        return st.session_state["cached_pocket_all_recs"]
-
+def fetch_pocket_records(target_shimebi):
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
+    params = {}
+    if target_shimebi:
+        # サンプルコードと同様に、条件がある場合のみqueryパラメータを構築しつつ、新着順ソートを付与
+        params["query"] = f'field-99 = "{target_shimebi}" order by field-1 desc'
+    else:
+        params["query"] = "order by field-1 desc"
+
     try:
-        st.info("📡 @pocketサーバーからデータを初回取得しています（最大30秒）...")
-        response = requests.get(url, headers=headers, timeout=30)
+        st.info(f"📡 @pocketサーバーからデータを取得中（締日: {target_shimebi or '指定なし'}）...")
+        response = requests.get(url, headers=headers, params=params, timeout=20)
         
+        # サンプルコード同様、クエリ付きリクエストで失敗した場合は安全にクエリなしでフォールバック
+        if response.status_code != 200 and "query" in params:
+            response = requests.get(url, headers=headers, timeout=20)
+
         if response.status_code == 200:
-            result = response.json()
-            raw_items = result.get("records", result.get("Data", result.get("Records", [])))
+            res_json = response.json()
+            raw_items = res_json.get("records", res_json.get("Data", res_json.get("Records", [])))
             parsed_records = []
             for item in raw_items:
                 if not isinstance(item, dict):
@@ -249,22 +252,17 @@ def get_cached_pocket_records():
                 if not isinstance(rec_body, dict):
                     rec_body = {}
                 parsed_records.append({**item, **rec_body})
-            
-            # セッションにキャッシュ保存（2回目以降はAPI通信ゼロで瞬時に動作）
-            st.session_state["cached_pocket_all_recs"] = parsed_records
-            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードをキャッシュしました。")
+            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
-            st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
+            st.error(f"❌ APIエラー (ステータスコード {response.status_code}): {response.text}")
     except Exception as e:
-        st.error(f"🚨 通信例外エラー（タイムアウト等）: {e}")
+        st.error(f"🚨 通信例外エラー: {e}")
     return []
 
 # ==========================================
 # 6. メイン画面
 # ==========================================
-st.info("💡 期間・締日を設定し、必要に応じて挨拶文や顧客ごとの備考を入力してPDFを作成できます。（高速キャッシュ対応）")
-
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
 auto_start = date(c_year, c_month, 1)
@@ -273,7 +271,7 @@ auto_end = date(c_year, c_month, auto_last_day)
 
 col_c1, col_c2, col_c3 = st.columns(3)
 with col_c1:
-    shimebi_options = {"末日締め (99)": "99", "20日締め (20)": "20", "15日締め (15)": "15", "10日締め (10)": "10"}
+    shimebi_options = {"指定なし": "", "末日締め (99)": "99", "20日締め (20)": "20", "15日締め (15)": "15", "10日締め (10)": "10"}
     selected_shimebi_label = st.selectbox("対象の締日グループ", options=list(shimebi_options.keys()), key="inv_shime_sel")
     target_shimebi = shimebi_options[selected_shimebi_label]
 with col_c2:
@@ -295,16 +293,8 @@ with bc2:
 with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
-# キャッシュクリア用ボタン
-if st.button("🔄 @pocketデータを再読み込み（キャッシュクリア）", key="btn_clear_cache"):
-    if "cached_pocket_all_recs" in st.session_state:
-        del st.session_state["cached_pocket_all_recs"]
-    st.success("🔄 キャッシュをクリアしました。再度「条件に合致するデータを集計する」を押してください。")
-    st.rerun()
-
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    # キャッシュからデータを一瞬で取得し、Python側で絞り込み（サーバー負荷ゼロ＆タイムアウト防止）
-    all_recs = get_cached_pocket_records()
+    all_recs = fetch_pocket_records(target_shimebi)
     period_invoice_rows = []
 
     for r in all_recs:
@@ -313,10 +303,6 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
         book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
-
-        # 締日グループのチェック（完全一致または部分一致）
-        if target_shimebi and target_shimebi not in shimebi_val:
-            continue
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
