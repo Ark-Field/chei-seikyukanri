@@ -17,7 +17,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 # ==========================================
 # 1. ページ基本設定 ＆ デザインCSS
 # ==========================================
-st.set_page_config(page_title="期間集計・締日請求書発行（デバッグ付き）", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="期間集計・締日請求書発行システム", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🔍 期間集計・締日請求書発行（デバッグモード）")
+st.title("🖨️ 期間集計・締日請求書発行（顧客別個別PDF）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -198,16 +198,25 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     return buffer
 
 # ==========================================
-# 5. データ取得関数
+# 5. データ取得関数（最新順：降順ソートで1000件の壁を突破）
 # ==========================================
 def fetch_pocket_records_for_period():
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
+    # queryパラメータで受注日(field-1)の新しい順(desc)にソートして1000件を取得
+    params = {
+        "query": "order by field-1 desc"
+    }
+    
     try:
-        st.info("📡 @pocketからデータを取得しています（最大45秒）...")
-        response = requests.get(url, headers=headers, timeout=45)
+        st.info("📡 @pocketから最新データを取得しています（新しい順・最大45秒）...")
+        response = requests.get(url, headers=headers, params=params, timeout=45)
         
+        if response.status_code != 200 and "query" in params:
+            # クエリ付きでエラーになる場合のフォールバック
+            response = requests.get(url, headers=headers, timeout=45)
+
         if response.status_code == 200:
             result = response.json()
             raw_items = result.get("records", result.get("Data", result.get("Records", [])))
@@ -222,7 +231,7 @@ def fetch_pocket_records_for_period():
                 merged_body = {**item, **rec_body}
                 parsed_records.append(merged_body)
             
-            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。")
+            st.success(f"✨ 取得成功: 最新順に合計 {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
             st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
@@ -231,9 +240,9 @@ def fetch_pocket_records_for_period():
     return []
 
 # ==========================================
-# 6. メイン画面（デバッグ表示付き）
+# 6. メイン画面（当月自動設定 ＆ デバッグ表示付き）
 # ==========================================
-st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間」をもとに集計します（デバッグ表示あり）。")
+st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間（当月自動）」をもとに集計します。")
 
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
@@ -267,23 +276,23 @@ with bc2:
 with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
-if st.button("🔍 条件に合致するデータを集計する（デバッグ実行）", type="primary", key="btn_calc_period_inv"):
+if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
     all_recs = fetch_pocket_records_for_period()
     
+    # 取得した最新データからの最初の3件のデバッグ表示
     if all_recs:
-        st.write("--- 🔍 【デバッグ情報】最初の3件のレコードのデータ構造確認 ---")
+        st.write("--- 🔍 【最新順データ確認】最初の3件のレコード構造 ---")
         for idx, sample_r in enumerate(all_recs[:3]):
             s_pub = sample_r.get("field-8", "（空）")
             s_shime = sample_r.get("field-99", "（空）")
+            s_ord_date = sample_r.get("field-1", "（空）")
             s_sub89 = sample_r.get("field-89", [])
-            st.markdown(f"**[レコード #{idx+1}]** 出版社名(`field-8`): `{s_pub}` | 締日(`field-99`): `{s_shime}` (期待値: `{target_shimebi}`)")
+            st.markdown(f"**[レコード #{idx+1}]** 受注日(`field-1`): `{s_ord_date}` | 出版社名(`field-8`): `{s_pub}` | 締日(`field-99`): `{s_shime}`")
             if isinstance(s_sub89, list) and s_sub89:
                 for sub_i, item_89 in enumerate(s_sub89):
                     rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
                     st.code(f"  └ サブ89[{sub_i}] 売上日(field-89_1): {rec_89.get('field-89_1')} | 請求数量: {rec_89.get('field-89_3')}")
-            else:
-                st.warning("  └ サブテーブル field-89 が空、またはリストではありません。")
-        st.write("---------------------------------------------------------------")
+        st.write("---------------------------------------------------------")
 
     period_invoice_rows = []
     skipped_shime_count = 0
@@ -296,7 +305,6 @@ if st.button("🔍 条件に合致するデータを集計する（デバッグ�
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
 
-        # 締日フィルターの判定
         if target_shimebi and target_shimebi not in shimebi_val:
             skipped_shime_count += 1
             continue
@@ -363,4 +371,4 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
                 key=f"dl_period_inv_{pub}"
             )
 elif "period_invoice_rows" in st.session_state:
-    st.warning("⚠️ 指定された条件に一致する売上データが見つかりませんでした。（上記のデバッグ情報で field-99 や売上日の値をご確認ください）")
+    st.warning("⚠️ 指定された条件（当月期間）に一致する売上データが見つかりませんでした。上記のデバッグ情報に表示された最新データの受注日や売上日をご確認ください。")
