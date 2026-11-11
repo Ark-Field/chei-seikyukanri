@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（罫線・備考UI対応版）")
+st.title("🖨️ 期間集計・締日請求書発行（18行罫線・15秒タイムアウト版）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -93,7 +93,7 @@ def parse_date_safe(val):
     except ValueError:
         return None
 
-# --- 期間集計請求書用PDF生成（罫線・備考対応） ---
+# --- 期間集計請求書用PDF生成（18行パディング＆罫線対応） ---
 def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, customer_remark, bank_info):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=portrait(A4), leftMargin=25, rightMargin=25, topMargin=25, bottomMargin=25)
@@ -144,7 +144,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
-    # 明細テーブル（罫線をしっかり引いた仕様）
+    # 明細テーブルの作成
     table_data = [[
         Paragraph("売上日", th_style),
         Paragraph("ISBN", th_style),
@@ -156,22 +156,43 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
         Paragraph("備考", th_style)
     ]]
 
+    # 実際のデータを追加
     for item in items:
         q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
         p_num = float(item["単価"]) if item["単価"] else 0.0
-        line_total = q_num * p_num
+        line_total = q_num * p_num if (q_num > 0 and p_num > 0) else ""
         format_edition = f"{item['判型']} / {item['版']}" if (item['判型'] or item['版']) else ""
+
+        qty_display = f"{q_num} 部" if q_num > 0 else ""
+        price_display = f"￥{p_num:,.2f}" if p_num > 0 else ""
+        total_display = f"￥{line_total:,.2f}" if isinstance(line_total, (int, float)) else ""
 
         table_data.append([
             Paragraph(str(item["売上日"]), td_style),
             Paragraph(str(item["ISBN"]), td_style),
             Paragraph(str(item["品名"]), td_style),
             Paragraph(format_edition, td_style),
-            Paragraph(f"{q_num} 部", td_right),
-            Paragraph(f"￥{p_num:,.2f}", td_right),
-            Paragraph(f"￥{line_total:,.2f}", td_right),
+            Paragraph(qty_display, td_right),
+            Paragraph(price_display, td_right),
+            Paragraph(total_display, td_right),
             Paragraph(str(item["備考"]), td_style)
         ])
+
+    # ★ 最小18行になるように空行（罫線用パディング）を自動追加
+    min_rows = 18
+    current_row_count = len(items)
+    if current_row_count < min_rows:
+        for _ in range(min_rows - current_row_count):
+            table_data.append([
+                Paragraph("", td_style),
+                Paragraph("", td_style),
+                Paragraph("", td_style),
+                Paragraph("", td_style),
+                Paragraph("", td_right),
+                Paragraph("", td_right),
+                Paragraph("", td_right),
+                Paragraph("", td_style)
+            ])
 
     inv_table = Table(table_data, colWidths=[60, 70, 140, 55, 45, 60, 65, 50])
     inv_table.setStyle(TableStyle([
@@ -179,7 +200,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOTTOMPADDING", (0, 0), (-1,-1), 4),
         ("TOPPADDING", (0, 0), (-1,-1), 4),
-        ("GRID", (0, 0), (-1,-1), 0.5, colors.HexColor("#94A3B8")), # しっかりした罫線
+        ("GRID", (0, 0), (-1,-1), 0.5, colors.HexColor("#94A3B8")),
         ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1E3A8A")),
     ]))
     elements.append(inv_table)
@@ -209,7 +230,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数
+# 5. データ取得関数（タイムアウト15秒に短縮）
 # ==========================================
 def fetch_pocket_records_for_period():
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
@@ -217,10 +238,11 @@ def fetch_pocket_records_for_period():
     params = {"query": "order by field-1 desc"}
     
     try:
-        st.info("📡 @pocketから最新データを取得しています（新しい順・最大45秒）...")
-        response = requests.get(url, headers=headers, params=params, timeout=45)
+        st.info("📡 @pocketから最新データを取得しています（新しい順・タイムアウト15秒）...")
+        # タイムアウトを 15秒 に短縮
+        response = requests.get(url, headers=headers, params=params, timeout=15)
         if response.status_code != 200 and "query" in params:
-            response = requests.get(url, headers=headers, timeout=45)
+            response = requests.get(url, headers=headers, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
@@ -238,7 +260,7 @@ def fetch_pocket_records_for_period():
         else:
             st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
     except Exception as e:
-        st.error(f"🚨 通信例外エラー: {e}")
+        st.error(f"🚨 通信例外エラー（タイムアウト等）: {e}")
     return []
 
 # ==========================================
@@ -262,7 +284,6 @@ with col_c2:
 with col_c3:
     inv_end_date = st.date_input("集計期間（終了）", value=auto_end, key="inv_end")
 
-# 挨拶文の編集可能UI
 default_greeting = "下記のとおりご請求申し上げます。"
 greeting_input = st.text_input("📝 PDFヘッダーの挨拶文（編集可能）", value=default_greeting, key="pdf_greeting")
 
@@ -327,21 +348,17 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
     for r in st.session_state["period_invoice_rows"]:
         grouped_period_inv[r["出版社名"]].append(r)
 
-    # --- 顧客別サマリー ＆ 個別備考の入力UI ---
     st.markdown("### 📊 顧客別売上額集計 ＆ 個別備考の編集")
     st.info("💡 各顧客ごとにPDFへ記載する「備考」を入力できます。")
 
-    # セッションステートに顧客ごとの備考用辞書を初期化
     if "customer_remarks" not in st.session_state:
         st.session_state["customer_remarks"] = {}
 
-    summary_data = []
     for pub, items in grouped_period_inv.items():
         subtotal = sum((int(i["請求数量"]) if str(i["請求数量"]).isdigit() else 0) * (float(i["単価"]) if i["単価"] else 0.0) for i in items)
         tax = round(subtotal * 0.10)
         total = subtotal + tax
         
-        # デフォルト備考
         if pub not in st.session_state["customer_remarks"]:
             st.session_state["customer_remarks"][pub] = ""
 
