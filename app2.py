@@ -17,7 +17,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 # ==========================================
 # 1. ページ基本設定 ＆ デザインCSS
 # ==========================================
-st.set_page_config(page_title="期間集計・締日請求書発行システム", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="期間集計・締日請求書発行（デバッグ付き）", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（顧客別個別PDF）")
+st.title("🔍 期間集計・締日請求書発行（デバッグモード）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -144,7 +144,6 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
-    # 明細テーブル（売上日, ISBN, 品名, 判型/版, 数量, 単価, 金額, 備考）
     table_data = [[
         Paragraph("売上日", th_style),
         Paragraph("ISBN", th_style),
@@ -199,15 +198,14 @@ def generate_period_invoice_pdf(pub_name, items, period_str, bank_info):
     return buffer
 
 # ==========================================
-# 5. データ取得関数（タイムアウト対策 ＆ 1000件対応）
+# 5. データ取得関数
 # ==========================================
-def fetch_pocket_records_for_period(start_date, end_date):
+def fetch_pocket_records_for_period():
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
     
     try:
-        st.info("📡 @pocketからデータを取得しています（データ量が多いため最大45秒ほどかかります）...")
-        # タイムアウトを45秒に設定し、確実に全件を安全に取得
+        st.info("📡 @pocketからデータを取得しています（最大45秒）...")
         response = requests.get(url, headers=headers, timeout=45)
         
         if response.status_code == 200:
@@ -224,20 +222,19 @@ def fetch_pocket_records_for_period(start_date, end_date):
                 merged_body = {**item, **rec_body}
                 parsed_records.append(merged_body)
             
-            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。対象期間・締日の集計を行います。")
+            st.success(f"✨ 取得成功: 合計 {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
-            st.error(f"❌ APIエラー (ステータスコード {response.status_code}): {response.text}")
+            st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
     except Exception as e:
-        st.error(f"🚨 通信例外エラー（タイムアウト等）: {e}")
+        st.error(f"🚨 通信例外エラー: {e}")
     return []
 
 # ==========================================
-# 6. メイン画面（タブ4単体）
+# 6. メイン画面（デバッグ表示付き）
 # ==========================================
-st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間（当月自動設定）」をもとに顧客ごとにデータを集計し、個別の請求書PDFを作成します。")
+st.info("💡 指定した「締日グループ（field-99）」と「売上集計期間」をもとに集計します（デバッグ表示あり）。")
 
-# 当月の1日と末日を自動算出
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
 auto_start = date(c_year, c_month, 1)
@@ -270,29 +267,49 @@ with bc2:
 with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
-if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    all_recs = fetch_pocket_records_for_period(inv_start_date, inv_end_date)
+if st.button("🔍 条件に合致するデータを集計する（デバッグ実行）", type="primary", key="btn_calc_period_inv"):
+    all_recs = fetch_pocket_records_for_period()
     
-    period_invoice_rows = []
-    for r in all_recs:
-        pub_name = clean_val(r.get("field-8", ""))     # 出版社名
-        shimebi_val = clean_val(r.get("field-99", "")) # 締日 (99, 20, 15, 10)
-        book_title = clean_val(r.get("field-13", ""))  # 品名 (field-13)
-        format_val = clean_val(r.get("field-23", ""))  # 判型 (field-23)
-        edition_val = clean_val(r.get("field-27", "")) # 版 (field-27)
+    if all_recs:
+        st.write("--- 🔍 【デバッグ情報】最初の3件のレコードのデータ構造確認 ---")
+        for idx, sample_r in enumerate(all_recs[:3]):
+            s_pub = sample_r.get("field-8", "（空）")
+            s_shime = sample_r.get("field-99", "（空）")
+            s_sub89 = sample_r.get("field-89", [])
+            st.markdown(f"**[レコード #{idx+1}]** 出版社名(`field-8`): `{s_pub}` | 締日(`field-99`): `{s_shime}` (期待値: `{target_shimebi}`)")
+            if isinstance(s_sub89, list) and s_sub89:
+                for sub_i, item_89 in enumerate(s_sub89):
+                    rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
+                    st.code(f"  └ サブ89[{sub_i}] 売上日(field-89_1): {rec_89.get('field-89_1')} | 請求数量: {rec_89.get('field-89_3')}")
+            else:
+                st.warning("  └ サブテーブル field-89 が空、またはリストではありません。")
+        st.write("---------------------------------------------------------------")
 
+    period_invoice_rows = []
+    skipped_shime_count = 0
+    skipped_date_count = 0
+
+    for r in all_recs:
+        pub_name = clean_val(r.get("field-8", ""))
+        shimebi_val = clean_val(r.get("field-99", ""))
+        book_title = clean_val(r.get("field-13", ""))
+        format_val = clean_val(r.get("field-23", ""))
+        edition_val = clean_val(r.get("field-27", ""))
+
+        # 締日フィルターの判定
         if target_shimebi and target_shimebi not in shimebi_val:
+            skipped_shime_count += 1
             continue
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
             for item_89 in sub_89:
                 rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
-                sale_date_raw = parse_date_safe(rec_89.get("field-89_1")) # 売上日
+                sale_date_raw = parse_date_safe(rec_89.get("field-89_1"))
 
                 if sale_date_raw and inv_start_date <= sale_date_raw <= inv_end_date:
-                    q_str = clean_val(rec_89.get("field-89_3", "0")) # 請求数量
-                    p_str = clean_val(r.get("field-5", "0"))         # 単価
+                    q_str = clean_val(rec_89.get("field-89_3", "0"))
+                    p_str = clean_val(r.get("field-5", "0"))
                     
                     period_invoice_rows.append({
                         "出版社名": pub_name,
@@ -306,7 +323,10 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
                         "単価": p_str,
                         "備考": clean_val(rec_89.get("field-89_7", ""))
                     })
+                else:
+                    skipped_date_count += 1
 
+    st.info(f"📊 【集計内訳】 締日違いで除外: {skipped_shime_count}件 | 期間外（または売上日なし）で除外: {skipped_date_count}件")
     st.session_state["period_invoice_rows"] = period_invoice_rows
 
 if "period_invoice_rows" in st.session_state and st.session_state["period_invoice_rows"]:
@@ -343,4 +363,4 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
                 key=f"dl_period_inv_{pub}"
             )
 elif "period_invoice_rows" in st.session_state:
-    st.warning("⚠️ 指定された条件に一致する売上データが見つかりませんでした。")
+    st.warning("⚠️ 指定された条件に一致する売上データが見つかりませんでした。（上記のデバッグ情報で field-99 や売上日の値をご確認ください）")
