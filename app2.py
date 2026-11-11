@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🖨️ 期間集計・締日請求書発行（18行罫線・15秒タイムアウト版）")
+st.title("🖨️ 期間集計・締日請求書発行（）")
 
 # ==========================================
 # 2. 日本語フォント登録処理（ReportLab用）
@@ -144,7 +144,6 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
-    # 明細テーブルの作成
     table_data = [[
         Paragraph("売上日", th_style),
         Paragraph("ISBN", th_style),
@@ -156,7 +155,6 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
         Paragraph("備考", th_style)
     ]]
 
-    # 実際のデータを追加
     for item in items:
         q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
         p_num = float(item["単価"]) if item["単価"] else 0.0
@@ -178,7 +176,6 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
             Paragraph(str(item["備考"]), td_style)
         ])
 
-    # ★ 最小18行になるように空行（罫線用パディング）を自動追加
     min_rows = 18
     current_row_count = len(items)
     if current_row_count < min_rows:
@@ -206,9 +203,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     elements.append(inv_table)
     elements.append(Spacer(1, 10))
 
-    # --- 最終段：備考欄 ＆ 振込先口座情報 ---
     footer_content = []
-    
     if customer_remark:
         remark_text = f"<b>【備考】</b><br/>{customer_remark.replace(chr(10), '<br/>')}"
         footer_content.append([Paragraph(remark_text, td_style)])
@@ -230,18 +225,30 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数（タイムアウト15秒に短縮）
+# 5. データ取得関数（）
 # ==========================================
-def fetch_pocket_records_for_period():
+def fetch_pocket_records_for_period(target_shimebi):
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
     headers = {"X-At-Pocket-API-Key": POCKET_API_KEY, "Accept": "application/json"}
-    params = {"query": "order by field-1 desc"}
+    
+    # 選択された締日グループ（field-99）をAPI側で絞り込み、新着順(desc)にソート
+    query_parts = []
+    if target_shimebi:
+        query_parts.append(f'field-99 = "{target_shimebi}"')
+    
+    query_str = " and ".join(query_parts) if query_parts else ""
+    if query_str:
+        query_str += " order by field-1 desc"
+    else:
+        query_str = "order by field-1 desc"
+
+    params = {"query": query_str}
     
     try:
-        st.info("📡 @pocketから最新データを取得しています（新しい順・タイムアウト15秒）...")
-        # タイムアウトを 15秒 に短縮
+        st.info(f"📡 サーバーから締日クエリ ({target_shimebi}) でデータを絞り込み取得中（タイムアウト15秒）...")
         response = requests.get(url, headers=headers, params=params, timeout=15)
-        if response.status_code != 200 and "query" in params:
+        
+        if response.status_code != 200:
             response = requests.get(url, headers=headers, timeout=15)
 
         if response.status_code == 200:
@@ -255,7 +262,7 @@ def fetch_pocket_records_for_period():
                 if not isinstance(rec_body, dict):
                     rec_body = {}
                 parsed_records.append({**item, **rec_body})
-            st.success(f"✨ 取得成功: 最新順に合計 {len(parsed_records)} 件のレコードを読み込みました。")
+            st.success(f"✨ 取得成功: 絞り込み対象の {len(parsed_records)} 件のレコードを読み込みました。")
             return parsed_records
         else:
             st.error(f"❌ APIエラー ({response.status_code}): {response.text}")
@@ -299,7 +306,8 @@ with bc3:
     p_bank_holder = st.text_input("口座名義", value="カ）チュウエイセイホンジョ", key="p_b_holder")
 
 if st.button("🔍 条件に合致するデータを集計する", type="primary", key="btn_calc_period_inv"):
-    all_recs = fetch_pocket_records_for_period()
+    # APIのサーバー負担を減らすため、選択された締日をクエリに渡して必要最小限のレコードを取得
+    all_recs = fetch_pocket_records_for_period(target_shimebi)
     period_invoice_rows = []
 
     for r in all_recs:
@@ -308,9 +316,6 @@ if st.button("🔍 条件に合致するデータを集計する", type="primary
         book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
-
-        if target_shimebi and target_shimebi not in shimebi_val:
-            continue
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
