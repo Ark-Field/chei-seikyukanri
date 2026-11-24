@@ -225,7 +225,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     return buffer
 
 # ==========================================
-# 5. データ取得関数（タイムアウト30秒に拡張 ＆ 安全なフォールバック）
+# 5. データ取得関数（タイムアウト45秒に拡張 ＆ 安全なフォールバック）
 # ==========================================
 def fetch_pocket_records_for_period(target_shimebi):
     url = f"{POCKET_BASE_URL}/api/apps/{APP_ID}/records"
@@ -236,13 +236,13 @@ def fetch_pocket_records_for_period(target_shimebi):
     params = {"query": query_str}
     
     try:
-        st.info(f"📡 サーバーからデータを取得中（締日: {target_shimebi} / タイムアウト30秒）...")
-        # タイムアウトを 30秒 に戻して確実に受け取る
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        st.info(f"📡 サーバーからデータを取得中（締日: {target_shimebi} / タイムアウト45秒）...")
+        # タイムアウトを 45秒 に拡張して確実に受け取る
+        response = requests.get(url, headers=headers, params=params, timeout=45)
         
         # クエリで万が一エラーになる場合はクエリなしで安全に再取得
         if response.status_code != 200:
-            response = requests.get(url, headers=headers, timeout=30)
+            response = requests.get(url, headers=headers, timeout=45)
 
         if response.status_code == 200:
             result = response.json()
