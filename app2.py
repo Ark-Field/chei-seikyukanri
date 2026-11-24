@@ -97,16 +97,44 @@ def parse_date_safe(val):
     except ValueError:
         return None
 
-def parse_qty_price(item):
-    q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
-    p_num = float(item["単価"]) if item["単価"] else 0.0
-    line_total = q_num * p_num if (q_num > 0 and p_num > 0) else 0.0
-    return q_num, p_num, line_total
+def parse_number_safe(val):
+    s = clean_val(val).replace(",", "").replace("￥", "").replace("¥", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+def parse_item_amounts(item):
+    """
+    数量・単価・金額を返す。
+    金額（field-89_8）に直接値が入っている場合はそれを優先採用し、
+    空欄の場合のみ 請求数量 × 単価 で算出する。
+    """
+    q_raw = parse_number_safe(item.get("請求数量", ""))
+    q_num = int(q_raw) if q_raw is not None else 0
+
+    p_raw = parse_number_safe(item.get("単価", ""))
+    p_num = float(p_raw) if p_raw is not None else 0.0
+
+    amt_raw = parse_number_safe(item.get("金額", ""))
+    if amt_raw is not None:
+        line_total = float(amt_raw)
+        has_amount = True
+    elif q_num > 0 and p_num > 0:
+        line_total = float(q_num * p_num)
+        has_amount = True
+    else:
+        line_total = 0.0
+        has_amount = False
+
+    return q_num, p_num, line_total, has_amount
 
 def calc_invoice_totals(items):
     subtotal = 0.0
     for item in items:
-        _, _, line_total = parse_qty_price(item)
+        _, _, line_total, _ = parse_item_amounts(item)
         subtotal += line_total
     tax_amount = round(subtotal * 0.10)
     grand_total = subtotal + tax_amount
@@ -223,7 +251,6 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
-    # 合計 551pt（受注番号列を追加し9列構成）
     col_widths = [54, 54, 70, 125, 50, 40, 56, 62, 40]
     table_data = [[
         Paragraph("売上日", th_style),
@@ -238,13 +265,12 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     ]]
 
     for item in items:
-        q_num, p_num, line_total = parse_qty_price(item)
-        has_calc = (q_num > 0 and p_num > 0)
+        q_num, p_num, line_total, has_amount = parse_item_amounts(item)
 
         format_edition = f"{item['判型']} / {item['版']}" if (item["判型"] and item["版"]) else (item["判型"] or item["版"])
         qty_display = f"{q_num:,}" if q_num > 0 else ""
         price_display = f"￥{p_num:,.2f}" if p_num > 0 else ""
-        total_display = f"￥{line_total:,.0f}" if has_calc else ""
+        total_display = f"￥{line_total:,.0f}" if has_amount else ""
 
         table_data.append([
             Paragraph(str(item["売上日"]), td_center),
@@ -327,7 +353,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     buffer.seek(0)
     return buffer
 
-# --- 期間集計請求書用Excel生成（モダンデザイン・A4縦印刷対応・受注番号対応） ---
+# --- 期間集計請求書用Excel生成（モダンデザイン・A4縦印刷対応・受注番号・金額field-89_8対応） ---
 def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, customer_remark, bank_info):
     wb = Workbook()
     ws = wb.active
@@ -443,8 +469,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
 
     current_row = header_row + 1
     for i_idx, item in enumerate(items):
-        q_num, p_num, line_total = parse_qty_price(item)
-        has_calc = (q_num > 0 and p_num > 0)
+        q_num, p_num, line_total, has_amount = parse_item_amounts(item)
         format_edition = f"{item['判型']} / {item['版']}" if (item["判型"] and item["版"]) else (item["判型"] or item["版"])
 
         row_fill = fill_zebra if i_idx % 2 == 1 else fill_white
@@ -458,7 +483,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
             format_edition,
             q_num if q_num > 0 else None,
             p_num if p_num > 0 else None,
-            line_total if has_calc else None,
+            line_total if has_amount else None,
             str(item["備考"]),
         ]
 
@@ -547,7 +572,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     out_buf.seek(0)
     return out_buf
 
-# --- 売上一覧表Excel生成（モダンデザイン・合計行・オートフィルター・A4横印刷対応・受注番号対応） ---
+# --- 売上一覧表Excel生成（モダンデザイン・合計行・オートフィルター・A4横印刷対応・金額field-89_8対応） ---
 def generate_sales_list_excel(rows, period_str, shimebi_label):
     wb = Workbook()
     ws = wb.active
@@ -632,8 +657,7 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
     current_row = header_row + 1
     total_qty = 0
     for i_idx, item in enumerate(rows):
-        q_num, p_num, line_total = parse_qty_price(item)
-        has_calc = (q_num > 0 and p_num > 0)
+        q_num, p_num, line_total, has_amount = parse_item_amounts(item)
         total_qty += q_num
         format_edition = f"{item['判型']} / {item['版']}" if (item["判型"] and item["版"]) else (item["判型"] or item["版"])
 
@@ -650,7 +674,7 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
             format_edition,
             q_num if q_num > 0 else 0,
             p_num if p_num > 0 else 0.0,
-            line_total if has_calc else 0.0,
+            line_total if has_amount else 0.0,
             str(item["備考"]),
         ]
 
@@ -805,23 +829,33 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
     for r in all_recs:
         pub_name = clean_val(r.get("field-8", ""))
         shimebi_val = clean_val(r.get("field-99", ""))
-        book_title = clean_val(r.get("field-13", ""))
+        main_book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
         order_no_val = clean_val(r.get("field-2", ""))
+        p_str = clean_val(r.get("field-5", "0"))
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
             for item_89 in sub_89:
                 rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
                 sale_date_raw = parse_date_safe(rec_89.get("field-89_1"))
-                q_str = clean_val(rec_89.get("field-89_3", "0"))
+                sub_book_title = clean_val(rec_89.get("field-89_2", ""))
+                book_title = sub_book_title if sub_book_title else main_book_title
 
-                if not sale_date_raw or not q_str or q_str == "0":
+                q_str = clean_val(rec_89.get("field-89_3", "0"))
+                amt_str = clean_val(rec_89.get("field-89_8", ""))
+
+                q_num_check = parse_number_safe(q_str)
+                amt_num_check = parse_number_safe(amt_str)
+
+                has_valid_qty = (q_num_check is not None and q_num_check != 0)
+                has_valid_amt = (amt_num_check is not None and amt_num_check != 0)
+
+                if not sale_date_raw or (not has_valid_qty and not has_valid_amt):
                     continue
 
                 if inv_start_date <= sale_date_raw <= inv_end_date:
-                    p_str = clean_val(r.get("field-5", "0"))
                     period_invoice_rows.append({
                         "出版社名": pub_name if pub_name else "（出版社名未設定）",
                         "締日": shimebi_val,
@@ -833,6 +867,7 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
                         "版": edition_val,
                         "請求数量": q_str,
                         "単価": p_str,
+                        "金額": amt_str,
                         "備考": clean_val(rec_89.get("field-89_7", ""))
                     })
 
