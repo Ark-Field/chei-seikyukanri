@@ -833,7 +833,7 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
         order_no_val = clean_val(r.get("field-2", ""))
-        p_str = clean_val(r.get("field-5", "0"))
+        main_price_str = clean_val(r.get("field-5", "0"))
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
@@ -844,6 +844,8 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
                 book_title = sub_book_title if sub_book_title else main_book_title
 
                 q_str = clean_val(rec_89.get("field-89_3", "0"))
+                sub_price_str = clean_val(rec_89.get("field-89_4", ""))
+                p_str = sub_price_str if sub_price_str else main_price_str
                 amt_str = clean_val(rec_89.get("field-89_8", ""))
 
                 q_num_check = parse_number_safe(q_str)
