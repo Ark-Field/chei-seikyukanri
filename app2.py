@@ -112,7 +112,7 @@ def calc_invoice_totals(items):
     grand_total = subtotal + tax_amount
     return subtotal, tax_amount, grand_total
 
-# --- 期間集計請求書用PDF生成（A4縦・自動改ページ・モダンデザイン） ---
+# --- 期間集計請求書用PDF生成（A4縦・自動改ページ・モダンデザイン・受注番号対応） ---
 def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, customer_remark, bank_info):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -143,8 +143,8 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     kpi_value = ParagraphStyle("KPIValue", parent=styles["Normal"], fontName=FONT_NAME, fontSize=13.5, leading=17, textColor=NAVY)
     kpi_accent = ParagraphStyle("KPIAccent", parent=styles["Normal"], fontName=FONT_NAME, fontSize=10, leading=14, textColor=ACCENT, alignment=2)
 
-    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontName=FONT_NAME, fontSize=7.5, leading=10, textColor=colors.white, alignment=1)
-    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontName=FONT_NAME, fontSize=7.5, leading=10, textColor=TEXT_MAIN)
+    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontName=FONT_NAME, fontSize=7.2, leading=9.5, textColor=colors.white, alignment=1)
+    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontName=FONT_NAME, fontSize=7.2, leading=9.5, textColor=TEXT_MAIN)
     td_center = ParagraphStyle("TDC", parent=td_style, alignment=1)
     td_right = ParagraphStyle("TDR", parent=td_style, alignment=2)
     foot_style = ParagraphStyle("Foot", parent=styles["Normal"], fontName=FONT_NAME, fontSize=8, leading=11.5, textColor=TEXT_MAIN)
@@ -223,9 +223,11 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     elements.append(summary_table)
     elements.append(Spacer(1, 8))
 
-    col_widths = [58, 74, 144, 56, 44, 60, 65, 46]
+    # 合計 551pt（受注番号列を追加し9列構成）
+    col_widths = [54, 54, 70, 125, 50, 40, 56, 62, 40]
     table_data = [[
         Paragraph("売上日", th_style),
+        Paragraph("受注番号", th_style),
         Paragraph("ISBN", th_style),
         Paragraph("品名", th_style),
         Paragraph("判型 / 版", th_style),
@@ -246,6 +248,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
 
         table_data.append([
             Paragraph(str(item["売上日"]), td_center),
+            Paragraph(str(item.get("受注番号", "")), td_center),
             Paragraph(str(item["ISBN"]), td_style),
             Paragraph(str(item["品名"]), td_style),
             Paragraph(format_edition, td_center),
@@ -260,6 +263,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
         for _ in range(min_rows - len(items)):
             table_data.append([
                 Paragraph("&nbsp;", td_center),
+                Paragraph("", td_center),
                 Paragraph("", td_style),
                 Paragraph("", td_style),
                 Paragraph("", td_center),
@@ -275,8 +279,8 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 4.5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4.5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3.5),
         ("LINEBELOW", (0, 1), (-1, -1), 0.4, SLATE_BORDER),
         ("BOX", (0, 0), (-1, -1), 0.8, NAVY),
         ("LINEBEFORE", (1, 0), (-1, -1), 0.35, colors.HexColor("#E2E8F0")),
@@ -323,7 +327,7 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     buffer.seek(0)
     return buffer
 
-# --- 期間集計請求書用Excel生成（モダンデザイン・A4縦印刷対応） ---
+# --- 期間集計請求書用Excel生成（モダンデザイン・A4縦印刷対応・受注番号対応） ---
 def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, customer_remark, bank_info):
     wb = Workbook()
     ws = wb.active
@@ -331,6 +335,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     ws.views.sheetView[0].showGridLines = True
 
     font_family = "Yu Gothic UI" if os.name == "nt" else "Arial"
+    last_col = 9  # A〜I
 
     f_banner = Font(name=font_family, size=16, bold=True, color="FFFFFF")
     f_banner_sub = Font(name=font_family, size=9, bold=True, color="BAE6FD")
@@ -357,18 +362,18 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     b_cell = Border(top=thin_slate, bottom=thin_slate, left=thin_slate, right=thin_slate)
     b_foot = Border(top=thin_slate, bottom=thin_slate, left=thick_accent, right=thin_slate)
 
-    ws.merge_cells("A1:F2")
-    ws.merge_cells("G1:H2")
+    ws.merge_cells("A1:G2")
+    ws.merge_cells("H1:I2")
     ws["A1"] = "請 求 書"
-    ws["G1"] = "INVOICE / 期間集計明細"
+    ws["H1"] = "INVOICE / 期間集計明細"
     for r in (1, 2):
-        for c in range(1, 9):
+        for c in range(1, last_col + 1):
             cell = ws.cell(row=r, column=c)
             cell.fill = fill_navy
             cell.border = b_header
-            cell.font = f_banner if c <= 6 else f_banner_sub
+            cell.font = f_banner if c <= 7 else f_banner_sub
             cell.alignment = Alignment(
-                horizontal="left" if c <= 6 else "right",
+                horizontal="left" if c <= 7 else "right",
                 vertical="center",
                 indent=1 if c == 1 else 0
             )
@@ -376,31 +381,31 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     ws.row_dimensions[2].height = 18
 
     client_display = pub_name if pub_name else "（出版社名未設定）"
-    ws.merge_cells("A4:E4")
-    ws.merge_cells("F4:H4")
+    ws.merge_cells("A4:F4")
+    ws.merge_cells("G4:I4")
     ws["A4"] = f"{client_display} 御中"
-    ws["F4"] = "(株)中永製本所"
+    ws["G4"] = "(株)中永製本所"
     ws["A4"].font = f_client
-    ws["F4"].font = f_body_bold
+    ws["G4"].font = f_body_bold
     ws["A4"].alignment = Alignment(horizontal="left", vertical="center")
-    ws["F4"].alignment = Alignment(horizontal="right", vertical="center")
+    ws["G4"].alignment = Alignment(horizontal="right", vertical="center")
     ws.row_dimensions[4].height = 24
 
-    ws.merge_cells("A5:E5")
-    ws.merge_cells("F5:H5")
+    ws.merge_cells("A5:F5")
+    ws.merge_cells("G5:I5")
     ws["A5"] = f"対象期間：{period_str} {greeting_text}"
-    ws["F5"] = f"発行日：{date.today().strftime('%Y年%m月%d日')} TEL: 048-798-7377"
+    ws["G5"] = f"発行日：{date.today().strftime('%Y年%m月%d日')} TEL: 048-798-7377"
     ws["A5"].font = f_body
-    ws["F5"].font = f_muted
+    ws["G5"].font = f_muted
     ws["A5"].alignment = Alignment(horizontal="left", vertical="center")
-    ws["F5"].alignment = Alignment(horizontal="right", vertical="center")
-    for c in range(1, 9):
+    ws["G5"].alignment = Alignment(horizontal="right", vertical="center")
+    for c in range(1, last_col + 1):
         ws.cell(row=5, column=c).border = Border(bottom=thin_slate)
     ws.row_dimensions[5].height = 20
 
     subtotal, tax_amount, grand_total = calc_invoice_totals(items)
     ws.merge_cells("A7:C7")
-    ws.merge_cells("D7:H7")
+    ws.merge_cells("D7:I7")
     ws["A7"] = "ご請求金額合計（税込）"
     ws["D7"] = f"小計（税抜）：￥{subtotal:,.0f} ／ 消費税（10%）：￥{tax_amount:,.0f}"
     ws["A7"].font = f_kpi_label
@@ -409,7 +414,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     ws["D7"].alignment = Alignment(horizontal="right", vertical="center")
 
     ws.merge_cells("A8:C8")
-    ws.merge_cells("D8:H8")
+    ws.merge_cells("D8:I8")
     ws["A8"] = grand_total
     ws["A8"].number_format = "￥#,##0"
     ws["A8"].font = f_kpi_val
@@ -420,13 +425,13 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
 
     for r in (7, 8):
         ws.row_dimensions[r].height = 20 if r == 7 else 24
-        for c in range(1, 9):
+        for c in range(1, last_col + 1):
             cell = ws.cell(row=r, column=c)
             cell.fill = fill_accent_soft
             cell.border = b_kpi
     ws.row_dimensions[9].height = 10
 
-    headers = ["売上日", "ISBN", "品名", "判型 / 版", "数量", "単価", "金額", "備考"]
+    headers = ["売上日", "受注番号", "ISBN", "品名", "判型 / 版", "数量", "単価", "金額", "備考"]
     header_row = 10
     ws.row_dimensions[header_row].height = 24
     for idx, h_text in enumerate(headers, start=1):
@@ -447,6 +452,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
 
         vals = [
             str(item["売上日"]),
+            str(item.get("受注番号", "")),
             str(item["ISBN"]),
             str(item["品名"]),
             format_edition,
@@ -460,17 +466,17 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
             cell = ws.cell(row=current_row, column=col_i, value=val)
             cell.fill = row_fill
             cell.border = b_cell
-            cell.font = f_body_bold if col_i == 7 else f_body
+            cell.font = f_body_bold if col_i == 8 else f_body
 
-            if col_i in (1, 4):
+            if col_i in (1, 2, 5):
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            elif col_i in (5, 6, 7):
+            elif col_i in (6, 7, 8):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
-                if col_i == 5 and val is not None:
+                if col_i == 6 and val is not None:
                     cell.number_format = "#,##0"
-                elif col_i == 6 and val is not None:
-                    cell.number_format = "￥#,##0.00"
                 elif col_i == 7 and val is not None:
+                    cell.number_format = "￥#,##0.00"
+                elif col_i == 8 and val is not None:
                     cell.number_format = "￥#,##0"
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -482,7 +488,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
         for pad_i in range(min_rows - len(items)):
             row_fill = fill_zebra if (len(items) + pad_i) % 2 == 1 else fill_white
             ws.row_dimensions[current_row].height = 20
-            for col_i in range(1, 9):
+            for col_i in range(1, last_col + 1):
                 cell = ws.cell(row=current_row, column=col_i, value="")
                 cell.fill = row_fill
                 cell.border = b_cell
@@ -492,17 +498,17 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     current_row += 1
 
     if customer_remark:
-        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=last_col)
         rm_cell = ws.cell(row=current_row, column=1, value=f"【備考】{customer_remark}")
         rm_cell.font = f_body
         rm_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
         ws.row_dimensions[current_row].height = max(24, 16 * (customer_remark.count("\n") + 1))
-        for col_i in range(1, 9):
+        for col_i in range(1, last_col + 1):
             ws.cell(row=current_row, column=col_i).fill = fill_zebra
             ws.cell(row=current_row, column=col_i).border = b_foot
         current_row += 1
 
-    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=last_col)
     bank_text = (
         f"【お振込先口座】{bank_info['bank_name']} {bank_info['bank_branch']}（{bank_info['bank_type']}）"
         f" 口座番号：{bank_info['bank_account']} ／ 口座名義：{bank_info['bank_holder']}"
@@ -511,19 +517,20 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     bk_cell.font = f_body_bold
     bk_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
     ws.row_dimensions[current_row].height = 24
-    for col_i in range(1, 9):
+    for col_i in range(1, last_col + 1):
         ws.cell(row=current_row, column=col_i).fill = fill_zebra
         ws.cell(row=current_row, column=col_i).border = b_foot
 
     col_widths_excel = {
         "A": 13,
-        "B": 16,
-        "C": 30,
-        "D": 14,
-        "E": 10,
-        "F": 13,
-        "G": 14,
-        "H": 16,
+        "B": 13,
+        "C": 16,
+        "D": 28,
+        "E": 13,
+        "F": 10,
+        "G": 13,
+        "H": 14,
+        "I": 15,
     }
     for col_letter, width in col_widths_excel.items():
         ws.column_dimensions[col_letter].width = width
@@ -540,7 +547,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     out_buf.seek(0)
     return out_buf
 
-# --- 売上一覧表Excel生成（モダンデザイン・合計行・オートフィルター・A4横印刷対応） ---
+# --- 売上一覧表Excel生成（モダンデザイン・合計行・オートフィルター・A4横印刷対応・受注番号対応） ---
 def generate_sales_list_excel(rows, period_str, shimebi_label):
     wb = Workbook()
     ws = wb.active
@@ -548,10 +555,10 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
     ws.views.sheetView[0].showGridLines = True
 
     font_family = "Yu Gothic UI" if os.name == "nt" else "Arial"
+    last_col = 11  # A〜K
 
     f_banner = Font(name=font_family, size=15, bold=True, color="FFFFFF")
     f_banner_sub = Font(name=font_family, size=9, bold=True, color="BAE6FD")
-    f_meta = Font(name=font_family, size=9.5, color="1E293B")
     f_meta_bold = Font(name=font_family, size=9.5, bold=True, color="0F172A")
     f_th = Font(name=font_family, size=9.5, bold=True, color="FFFFFF")
     f_body = Font(name=font_family, size=9.5, color="1E293B")
@@ -575,45 +582,42 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
     b_cell = Border(top=thin_slate, bottom=thin_slate, left=thin_slate, right=thin_slate)
     b_total = Border(top=med_navy, bottom=double_navy, left=thin_slate, right=thin_slate)
 
-    # 1. バナー (A1:J2)
-    ws.merge_cells("A1:G2")
-    ws.merge_cells("H1:J2")
+    ws.merge_cells("A1:H2")
+    ws.merge_cells("I1:K2")
     ws["A1"] = "売 上 一 覧 表"
-    ws["H1"] = "SALES SUMMARY LIST"
+    ws["I1"] = "SALES SUMMARY LIST"
     for r in (1, 2):
-        for c in range(1, 11):
+        for c in range(1, last_col + 1):
             cell = ws.cell(row=r, column=c)
             cell.fill = fill_navy
             cell.border = b_banner
-            cell.font = f_banner if c <= 7 else f_banner_sub
+            cell.font = f_banner if c <= 8 else f_banner_sub
             cell.alignment = Alignment(
-                horizontal="left" if c <= 7 else "right",
+                horizontal="left" if c <= 8 else "right",
                 vertical="center",
                 indent=1 if c == 1 else 0
             )
     ws.row_dimensions[1].height = 18
     ws.row_dimensions[2].height = 18
 
-    # 2. 集計条件バー (A4:J4)
-    subtotal, tax_amount, grand_total = calc_invoice_totals(rows)
-    ws.merge_cells("A4:E4")
-    ws.merge_cells("F4:J4")
+    subtotal, _, grand_total = calc_invoice_totals(rows)
+    ws.merge_cells("A4:F4")
+    ws.merge_cells("G4:K4")
     ws["A4"] = f"対象期間：{period_str} ｜ 締日区分：{shimebi_label} ｜ 明細件数：{len(rows)}件"
-    ws["F4"] = f"税抜合計：￥{subtotal:,.0f} ／ 税込合計：￥{grand_total:,.0f} ／ 発行日：{date.today().strftime('%Y/%m/%d')}"
+    ws["G4"] = f"税抜合計：￥{subtotal:,.0f} ／ 税込合計：￥{grand_total:,.0f} ／ 発行日：{date.today().strftime('%Y/%m/%d')}"
     ws["A4"].font = f_meta_bold
-    ws["F4"].font = f_meta_bold
+    ws["G4"].font = f_meta_bold
     ws["A4"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws["F4"].alignment = Alignment(horizontal="right", vertical="center")
+    ws["G4"].alignment = Alignment(horizontal="right", vertical="center")
     ws.row_dimensions[4].height = 24
-    for c in range(1, 11):
+    for c in range(1, last_col + 1):
         ws.cell(row=4, column=c).fill = fill_meta
         ws.cell(row=4, column=c).border = b_meta
 
     ws.row_dimensions[5].height = 8
 
-    # 3. テーブルヘッダー (Row 6)
     headers = [
-        "出版社名", "締日", "売上日", "ISBN", "品名",
+        "出版社名", "締日", "売上日", "受注番号", "ISBN", "品名",
         "判型 / 版", "請求数量", "単価", "金額（税抜）", "備考"
     ]
     header_row = 6
@@ -640,6 +644,7 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
             str(item["出版社名"]),
             str(item["締日"]),
             str(item["売上日"]),
+            str(item.get("受注番号", "")),
             str(item["ISBN"]),
             str(item["品名"]),
             format_edition,
@@ -653,27 +658,26 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
             cell = ws.cell(row=current_row, column=col_i, value=val)
             cell.fill = row_fill
             cell.border = b_cell
-            cell.font = f_body_bold if col_i in (1, 9) else f_body
+            cell.font = f_body_bold if col_i in (1, 10) else f_body
 
-            if col_i in (2, 3, 6):
+            if col_i in (2, 3, 4, 7):
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            elif col_i in (7, 8, 9):
+            elif col_i in (8, 9, 10):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
-                if col_i == 7:
+                if col_i == 8:
                     cell.number_format = "#,##0"
-                elif col_i == 8:
-                    cell.number_format = "￥#,##0.00"
                 elif col_i == 9:
+                    cell.number_format = "￥#,##0.00"
+                elif col_i == 10:
                     cell.number_format = "￥#,##0"
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
         current_row += 1
 
-    # 4. 合計行
     ws.row_dimensions[current_row].height = 24
     total_vals = [
-        "合計", "", "", "", "", "",
+        "合計", "", "", "", "", "", "",
         total_qty,
         None,
         subtotal,
@@ -686,26 +690,27 @@ def generate_sales_list_excel(rows, period_str, shimebi_label):
         cell.font = f_total
         if col_i == 1:
             cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-        elif col_i in (7, 9):
+        elif col_i in (8, 10):
             cell.alignment = Alignment(horizontal="right", vertical="center")
-            cell.number_format = "#,##0" if col_i == 7 else "￥#,##0"
+            cell.number_format = "#,##0" if col_i == 8 else "￥#,##0"
         else:
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
     last_data_row = max(header_row + 1, current_row - 1)
-    ws.auto_filter.ref = f"A{header_row}:J{last_data_row}"
+    ws.auto_filter.ref = f"A{header_row}:K{last_data_row}"
 
     col_widths_list = {
-        "A": 24,
+        "A": 22,
         "B": 8,
         "C": 13,
-        "D": 16,
-        "E": 30,
-        "F": 14,
-        "G": 11,
-        "H": 13,
-        "I": 15,
-        "J": 18,
+        "D": 14,
+        "E": 16,
+        "F": 28,
+        "G": 13,
+        "H": 11,
+        "I": 13,
+        "J": 15,
+        "K": 18,
     }
     for col_letter, width in col_widths_list.items():
         ws.column_dimensions[col_letter].width = width
@@ -803,6 +808,8 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
         book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
+        # 受注番号（必要に応じて @pocket の受注番号フィールドIDに調整してください）
+        order_no_parent = clean_val(r.get("field-1", ""))
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
@@ -810,6 +817,7 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
                 rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
                 sale_date_raw = parse_date_safe(rec_89.get("field-89_1"))
                 q_str = clean_val(rec_89.get("field-89_3", "0"))
+                order_no_val = clean_val(rec_89.get("field-89_0", "")) or order_no_parent
 
                 if not sale_date_raw or not q_str or q_str == "0":
                     continue
@@ -820,6 +828,7 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
                         "出版社名": pub_name if pub_name else "（出版社名未設定）",
                         "締日": shimebi_val,
                         "売上日": sale_date_raw,
+                        "受注番号": order_no_val,
                         "ISBN": clean_val(r.get("field-93", "")),
                         "品名": book_title,
                         "判型": format_val,
@@ -838,7 +847,6 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
 
     period_str_header = f"{inv_start_date.strftime('%Y年%m月%d日')} ～ {inv_end_date.strftime('%Y年%m月%d日')}"
 
-    # --- 売上一覧表Excelダウンロードセクション ---
     st.markdown("### 📋 **売上一覧表のダウンロード（Excel）**")
     sales_list_excel_bytes = generate_sales_list_excel(rows_data, period_str_header, selected_shimebi_label)
     st.download_button(
