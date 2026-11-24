@@ -808,8 +808,7 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
         book_title = clean_val(r.get("field-13", ""))
         format_val = clean_val(r.get("field-23", ""))
         edition_val = clean_val(r.get("field-27", ""))
-        # 受注番号（必要に応じて @pocket の受注番号フィールドIDに調整してください）
-        order_no_parent = clean_val(r.get("field-1", ""))
+        order_no_val = clean_val(r.get("field-2", ""))
 
         sub_89 = r.get("field-89", [])
         if isinstance(sub_89, list):
@@ -817,7 +816,6 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
                 rec_89 = item_89.get("record", item_89) if isinstance(item_89, dict) else {}
                 sale_date_raw = parse_date_safe(rec_89.get("field-89_1"))
                 q_str = clean_val(rec_89.get("field-89_3", "0"))
-                order_no_val = clean_val(rec_89.get("field-89_0", "")) or order_no_parent
 
                 if not sale_date_raw or not q_str or q_str == "0":
                     continue
