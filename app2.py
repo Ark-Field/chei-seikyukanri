@@ -97,12 +97,17 @@ def parse_date_safe(val):
     except ValueError:
         return None
 
+def parse_qty_price(item):
+    q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
+    p_num = float(item["単価"]) if item["単価"] else 0.0
+    line_total = q_num * p_num if (q_num > 0 and p_num > 0) else 0.0
+    return q_num, p_num, line_total
+
 def calc_invoice_totals(items):
     subtotal = 0.0
     for item in items:
-        q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
-        p_num = float(item["単価"]) if item["単価"] else 0.0
-        subtotal += q_num * p_num
+        _, _, line_total = parse_qty_price(item)
+        subtotal += line_total
     tax_amount = round(subtotal * 0.10)
     grand_total = subtotal + tax_amount
     return subtotal, tax_amount, grand_total
@@ -231,15 +236,13 @@ def generate_period_invoice_pdf(pub_name, items, period_str, greeting_text, cust
     ]]
 
     for item in items:
-        q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
-        p_num = float(item["単価"]) if item["単価"] else 0.0
+        q_num, p_num, line_total = parse_qty_price(item)
         has_calc = (q_num > 0 and p_num > 0)
-        line_total = q_num * p_num if has_calc else None
 
         format_edition = f"{item['判型']} / {item['版']}" if (item["判型"] and item["版"]) else (item["判型"] or item["版"])
         qty_display = f"{q_num:,}" if q_num > 0 else ""
         price_display = f"￥{p_num:,.2f}" if p_num > 0 else ""
-        total_display = f"￥{line_total:,.0f}" if line_total is not None else ""
+        total_display = f"￥{line_total:,.0f}" if has_calc else ""
 
         table_data.append([
             Paragraph(str(item["売上日"]), td_center),
@@ -354,7 +357,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     b_cell = Border(top=thin_slate, bottom=thin_slate, left=thin_slate, right=thin_slate)
     b_foot = Border(top=thin_slate, bottom=thin_slate, left=thick_accent, right=thin_slate)
 
-    # 1. バナー (A1:H2)
     ws.merge_cells("A1:F2")
     ws.merge_cells("G1:H2")
     ws["A1"] = "請 求 書"
@@ -373,7 +375,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     ws.row_dimensions[1].height = 18
     ws.row_dimensions[2].height = 18
 
-    # 2. 宛先・発行元・期間 (A4:H5)
     client_display = pub_name if pub_name else "（出版社名未設定）"
     ws.merge_cells("A4:E4")
     ws.merge_cells("F4:H4")
@@ -397,7 +398,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
         ws.cell(row=5, column=c).border = Border(bottom=thin_slate)
     ws.row_dimensions[5].height = 20
 
-    # 3. 金額サマリー (A7:H8)
     subtotal, tax_amount, grand_total = calc_invoice_totals(items)
     ws.merge_cells("A7:C7")
     ws.merge_cells("D7:H7")
@@ -426,7 +426,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
             cell.border = b_kpi
     ws.row_dimensions[9].height = 10
 
-    # 4. 明細テーブルヘッダー (Row 10)
     headers = ["売上日", "ISBN", "品名", "判型 / 版", "数量", "単価", "金額", "備考"]
     header_row = 10
     ws.row_dimensions[header_row].height = 24
@@ -439,10 +438,8 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
 
     current_row = header_row + 1
     for i_idx, item in enumerate(items):
-        q_num = int(item["請求数量"]) if str(item["請求数量"]).isdigit() else 0
-        p_num = float(item["単価"]) if item["単価"] else 0.0
+        q_num, p_num, line_total = parse_qty_price(item)
         has_calc = (q_num > 0 and p_num > 0)
-        line_total = q_num * p_num if has_calc else None
         format_edition = f"{item['判型']} / {item['版']}" if (item["判型"] and item["版"]) else (item["判型"] or item["版"])
 
         row_fill = fill_zebra if i_idx % 2 == 1 else fill_white
@@ -455,7 +452,7 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
             format_edition,
             q_num if q_num > 0 else None,
             p_num if p_num > 0 else None,
-            line_total if line_total is not None else None,
+            line_total if has_calc else None,
             str(item["備考"]),
         ]
 
@@ -480,7 +477,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
 
         current_row += 1
 
-    # 最低10行確保
     min_rows = 10
     if len(items) < min_rows:
         for pad_i in range(min_rows - len(items)):
@@ -495,7 +491,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
 
     current_row += 1
 
-    # 5. 備考・振込先フッター
     if customer_remark:
         ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
         rm_cell = ws.cell(row=current_row, column=1, value=f"【備考】{customer_remark}")
@@ -520,7 +515,6 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
         ws.cell(row=current_row, column=col_i).fill = fill_zebra
         ws.cell(row=current_row, column=col_i).border = b_foot
 
-    # 列幅設定（A4縦に収まるバランス）
     col_widths_excel = {
         "A": 13,
         "B": 16,
@@ -534,8 +528,189 @@ def generate_period_invoice_excel(pub_name, items, period_str, greeting_text, cu
     for col_letter, width in col_widths_excel.items():
         ws.column_dimensions[col_letter].width = width
 
-    # 印刷設定（A4縦・1ページ幅フィット・改ページ時ヘッダー繰返し）
     ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = f"{header_row}:{header_row}"
+
+    out_buf = io.BytesIO()
+    wb.save(out_buf)
+    out_buf.seek(0)
+    return out_buf
+
+# --- 売上一覧表Excel生成（モダンデザイン・合計行・オートフィルター・A4横印刷対応） ---
+def generate_sales_list_excel(rows, period_str, shimebi_label):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "売上一覧表"
+    ws.views.sheetView[0].showGridLines = True
+
+    font_family = "Yu Gothic UI" if os.name == "nt" else "Arial"
+
+    f_banner = Font(name=font_family, size=15, bold=True, color="FFFFFF")
+    f_banner_sub = Font(name=font_family, size=9, bold=True, color="BAE6FD")
+    f_meta = Font(name=font_family, size=9.5, color="1E293B")
+    f_meta_bold = Font(name=font_family, size=9.5, bold=True, color="0F172A")
+    f_th = Font(name=font_family, size=9.5, bold=True, color="FFFFFF")
+    f_body = Font(name=font_family, size=9.5, color="1E293B")
+    f_body_bold = Font(name=font_family, size=9.5, bold=True, color="0F172A")
+    f_total = Font(name=font_family, size=10, bold=True, color="0F172A")
+
+    fill_navy = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+    fill_meta = PatternFill(start_color="F0F9FF", end_color="F0F9FF", fill_type="solid")
+    fill_zebra = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+    fill_white = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    fill_total = PatternFill(start_color="E0F2FE", end_color="E0F2FE", fill_type="solid")
+
+    thin_slate = Side(style="thin", color="CBD5E1")
+    med_navy = Side(style="medium", color="0F172A")
+    thick_accent = Side(style="thick", color="0284C7")
+    double_navy = Side(style="double", color="0F172A")
+
+    b_banner = Border(top=med_navy, bottom=thick_accent, left=med_navy, right=med_navy)
+    b_meta = Border(top=thin_slate, bottom=thin_slate, left=thick_accent, right=thin_slate)
+    b_th = Border(top=med_navy, bottom=thick_accent, left=thin_slate, right=thin_slate)
+    b_cell = Border(top=thin_slate, bottom=thin_slate, left=thin_slate, right=thin_slate)
+    b_total = Border(top=med_navy, bottom=double_navy, left=thin_slate, right=thin_slate)
+
+    # 1. バナー (A1:J2)
+    ws.merge_cells("A1:G2")
+    ws.merge_cells("H1:J2")
+    ws["A1"] = "売 上 一 覧 表"
+    ws["H1"] = "SALES SUMMARY LIST"
+    for r in (1, 2):
+        for c in range(1, 11):
+            cell = ws.cell(row=r, column=c)
+            cell.fill = fill_navy
+            cell.border = b_banner
+            cell.font = f_banner if c <= 7 else f_banner_sub
+            cell.alignment = Alignment(
+                horizontal="left" if c <= 7 else "right",
+                vertical="center",
+                indent=1 if c == 1 else 0
+            )
+    ws.row_dimensions[1].height = 18
+    ws.row_dimensions[2].height = 18
+
+    # 2. 集計条件バー (A4:J4)
+    subtotal, tax_amount, grand_total = calc_invoice_totals(rows)
+    ws.merge_cells("A4:E4")
+    ws.merge_cells("F4:J4")
+    ws["A4"] = f"対象期間：{period_str} ｜ 締日区分：{shimebi_label} ｜ 明細件数：{len(rows)}件"
+    ws["F4"] = f"税抜合計：￥{subtotal:,.0f} ／ 税込合計：￥{grand_total:,.0f} ／ 発行日：{date.today().strftime('%Y/%m/%d')}"
+    ws["A4"].font = f_meta_bold
+    ws["F4"].font = f_meta_bold
+    ws["A4"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws["F4"].alignment = Alignment(horizontal="right", vertical="center")
+    ws.row_dimensions[4].height = 24
+    for c in range(1, 11):
+        ws.cell(row=4, column=c).fill = fill_meta
+        ws.cell(row=4, column=c).border = b_meta
+
+    ws.row_dimensions[5].height = 8
+
+    # 3. テーブルヘッダー (Row 6)
+    headers = [
+        "出版社名", "締日", "売上日", "ISBN", "品名",
+        "判型 / 版", "請求数量", "単価", "金額（税抜）", "備考"
+    ]
+    header_row = 6
+    ws.row_dimensions[header_row].height = 24
+    for idx, text in enumerate(headers, start=1):
+        c = ws.cell(row=header_row, column=idx, value=text)
+        c.font = f_th
+        c.fill = fill_navy
+        c.border = b_th
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    current_row = header_row + 1
+    total_qty = 0
+    for i_idx, item in enumerate(rows):
+        q_num, p_num, line_total = parse_qty_price(item)
+        has_calc = (q_num > 0 and p_num > 0)
+        total_qty += q_num
+        format_edition = f"{item['判型']} / {item['版']}" if (item["判型"] and item["版"]) else (item["判型"] or item["版"])
+
+        row_fill = fill_zebra if i_idx % 2 == 1 else fill_white
+        ws.row_dimensions[current_row].height = 20
+
+        vals = [
+            str(item["出版社名"]),
+            str(item["締日"]),
+            str(item["売上日"]),
+            str(item["ISBN"]),
+            str(item["品名"]),
+            format_edition,
+            q_num if q_num > 0 else 0,
+            p_num if p_num > 0 else 0.0,
+            line_total if has_calc else 0.0,
+            str(item["備考"]),
+        ]
+
+        for col_i, val in enumerate(vals, start=1):
+            cell = ws.cell(row=current_row, column=col_i, value=val)
+            cell.fill = row_fill
+            cell.border = b_cell
+            cell.font = f_body_bold if col_i in (1, 9) else f_body
+
+            if col_i in (2, 3, 6):
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            elif col_i in (7, 8, 9):
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                if col_i == 7:
+                    cell.number_format = "#,##0"
+                elif col_i == 8:
+                    cell.number_format = "￥#,##0.00"
+                elif col_i == 9:
+                    cell.number_format = "￥#,##0"
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+        current_row += 1
+
+    # 4. 合計行
+    ws.row_dimensions[current_row].height = 24
+    total_vals = [
+        "合計", "", "", "", "", "",
+        total_qty,
+        None,
+        subtotal,
+        ""
+    ]
+    for col_i, val in enumerate(total_vals, start=1):
+        cell = ws.cell(row=current_row, column=col_i, value=val)
+        cell.fill = fill_total
+        cell.border = b_total
+        cell.font = f_total
+        if col_i == 1:
+            cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        elif col_i in (7, 9):
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+            cell.number_format = "#,##0" if col_i == 7 else "￥#,##0"
+        else:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    last_data_row = max(header_row + 1, current_row - 1)
+    ws.auto_filter.ref = f"A{header_row}:J{last_data_row}"
+
+    col_widths_list = {
+        "A": 24,
+        "B": 8,
+        "C": 13,
+        "D": 16,
+        "E": 30,
+        "F": 14,
+        "G": 11,
+        "H": 13,
+        "I": 15,
+        "J": 18,
+    }
+    for col_letter, width in col_widths_list.items():
+        ws.column_dimensions[col_letter].width = width
+
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
@@ -586,7 +761,7 @@ def fetch_pocket_records_for_period(target_shimebi):
 # ==========================================
 # 6. メイン画面
 # ==========================================
-st.info("💡 **期間・締日**を設定し、必要に応じて**挨拶文**や**顧客ごとの備考**を入力して**PDF / Excel**を作成できます。")
+st.info("💡 **期間・締日**を設定し、必要に応じて**挨拶文**や**顧客ごとの備考**を入力して**請求書（PDF / Excel）**や**売上一覧表（Excel）**を作成できます。")
 
 today_date = date.today()
 c_year, c_month = today_date.year, today_date.month
@@ -657,12 +832,27 @@ if st.button("🔍 **条件に合致するデータを集計する**", type="pri
     st.session_state["period_invoice_rows"] = period_invoice_rows
 
 if "period_invoice_rows" in st.session_state and st.session_state["period_invoice_rows"]:
-    df_period_inv = pd.DataFrame(st.session_state["period_invoice_rows"])
+    rows_data = st.session_state["period_invoice_rows"]
+    df_period_inv = pd.DataFrame(rows_data)
     st.success(f"✨ 期間集計対象の有効な明細が **{len(df_period_inv)} 件** 見つかりました。")
+
+    period_str_header = f"{inv_start_date.strftime('%Y年%m月%d日')} ～ {inv_end_date.strftime('%Y年%m月%d日')}"
+
+    # --- 売上一覧表Excelダウンロードセクション ---
+    st.markdown("### 📋 **売上一覧表のダウンロード（Excel）**")
+    sales_list_excel_bytes = generate_sales_list_excel(rows_data, period_str_header, selected_shimebi_label)
+    st.download_button(
+        label="📊 **売上一覧表をダウンロード（.xlsx）**",
+        data=sales_list_excel_bytes,
+        file_name=f"売上一覧表_{inv_start_date.strftime('%Y%m%d')}-{inv_end_date.strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_sales_list_xlsx"
+    )
+    st.markdown("---")
 
     from collections import defaultdict
     grouped_period_inv = defaultdict(list)
-    for r in st.session_state["period_invoice_rows"]:
+    for r in rows_data:
         grouped_period_inv[r["出版社名"]].append(r)
 
     st.markdown("### 📊 **顧客別売上額集計 ＆ 個別備考の編集**")
@@ -692,7 +882,6 @@ if "period_invoice_rows" in st.session_state and st.session_state["period_invoic
 
     st.subheader("📥 **顧客ごとの個別請求書ダウンロード（PDF / Excel）**")
 
-    period_str_header = f"{inv_start_date.strftime('%Y年%m月%d日')} ～ {inv_end_date.strftime('%Y年%m月%d日')}"
     bank_dict = {
         "bank_name": p_bank_name, "bank_branch": p_bank_branch,
         "bank_type": p_bank_type, "bank_account": p_bank_account, "bank_holder": p_bank_holder
